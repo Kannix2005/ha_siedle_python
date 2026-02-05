@@ -181,6 +181,7 @@ class SipConnection:
         self._local_ip: Optional[str] = None
         self._local_port = 5060
         self._call_id = str(uuid.uuid4())
+        self._from_tag = uuid.uuid4().hex[:8]  # Keep same tag for all REGISTERs
         self._cseq = 0
         self._realm: Optional[str] = None
         self._nonce: Optional[str] = None
@@ -294,7 +295,6 @@ class SipConnection:
         local_ip = self._get_local_ip()
         cseq = self._next_cseq()
         branch = uuid.uuid4().hex[:12]
-        tag = uuid.uuid4().hex[:8]
         uri = f"sip:{self.config.host}"
         
         transport_str = "TLS" if self.config.transport == SipTransport.TLS else "UDP"
@@ -303,7 +303,7 @@ class SipConnection:
             f"REGISTER {uri} SIP/2.0",
             f"Via: SIP/2.0/{transport_str} {local_ip}:{self._local_port};rport;branch=z9hG4bK-{branch}",
             "Max-Forwards: 70",
-            f"From: <sip:{self.config.username}@{self.config.host}>;tag={tag}",
+            f"From: <sip:{self.config.username}@{self.config.host}>;tag={self._from_tag}",
             f"To: <sip:{self.config.username}@{self.config.host}>",
             f"Call-ID: {self._call_id}@{local_ip}",
             f"CSeq: {cseq} REGISTER",
@@ -521,20 +521,28 @@ class SipConnection:
             if msg.status_code == 401 or msg.status_code == 407:
                 # Extract auth params
                 www_auth = msg.headers.get("WWW-Authenticate") or msg.headers.get("Proxy-Authenticate", "")
-                _LOGGER.debug(f"{self.name}: Auth header: {www_auth[:100]}...")
+                _LOGGER.debug(f"{self.name}: Auth header: {www_auth}")
+                
+                if not www_auth:
+                    _LOGGER.error(f"{self.name}: No WWW-Authenticate header found! Headers: {list(msg.headers.keys())}")
+                    return False
+                
                 realm_match = re.search(r'realm="([^"]+)"', www_auth)
                 nonce_match = re.search(r'nonce="([^"]+)"', www_auth)
                 
                 if realm_match and nonce_match:
                     self._realm = realm_match.group(1)
                     self._nonce = nonce_match.group(1)
+                    _LOGGER.debug(f"{self.name}: Extracted realm={self._realm}, nonce={self._nonce[:20]}...")
                     
                     # Authenticated REGISTER
+                    _LOGGER.debug(f"{self.name}: Sending authenticated REGISTER...")
                     auth_register = self._create_register(with_auth=True)
                     self._socket.send(auth_register)
                     
                     response = self._socket.recv(4096)
                     msg = self.parse_message(response)
+                    _LOGGER.debug(f"{self.name}: Auth response: {msg.status_code} {msg.status_text}")
                     
                     if msg.status_code == 200:
                         _LOGGER.info(f"{self.name}: Registration successful!")
@@ -542,7 +550,10 @@ class SipConnection:
                         return True
                     else:
                         _LOGGER.error(f"{self.name}: Registration failed: {msg.status_code} {msg.status_text}")
+                        _LOGGER.debug(f"{self.name}: Response body: {msg.raw[:500]}")
                         return False
+                else:
+                    _LOGGER.error(f"{self.name}: Could not extract realm/nonce from: {www_auth}")
             elif msg.status_code == 200:
                 _LOGGER.info(f"{self.name}: Registration successful (no auth needed)")
                 self._registered = True
