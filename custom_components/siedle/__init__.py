@@ -177,12 +177,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 )
                 
                 # Start SIP manager in background
-                await hass.async_add_executor_job(sip_manager.start)
+                _LOGGER.info("Starting new SIP Call Manager...")
+                started = await hass.async_add_executor_job(sip_manager.start)
                 
-                hass.data[DOMAIN][entry.entry_id]["sip_manager"] = sip_manager
-                hass.data[DOMAIN][entry.entry_id]["rtp_bridge"] = rtp_bridge
-                
-                _LOGGER.info("SIP Call Manager started successfully")
+                if started:
+                    hass.data[DOMAIN][entry.entry_id]["sip_manager"] = sip_manager
+                    hass.data[DOMAIN][entry.entry_id]["rtp_bridge"] = rtp_bridge
+                    _LOGGER.info("SIP Call Manager started successfully")
+                else:
+                    _LOGGER.warning("SIP Call Manager failed to start - falling back to legacy SIP listener")
+                    sip_manager = None
+                    # Fallback to old SIP listener
+                    await hass.async_add_executor_job(
+                        siedle.start_sip_listener,
+                        lambda event_type, data: _sip_callback(hass, entry, event_type, data)
+                    )
             else:
                 _LOGGER.warning("No SIP credentials available - using legacy SIP listener")
                 # Fallback to old SIP listener
