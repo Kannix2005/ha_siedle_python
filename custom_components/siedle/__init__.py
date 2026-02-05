@@ -131,6 +131,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             sip_creds = await hass.async_add_executor_job(siedle.get_sip_credentials)
             
             if sip_creds:
+                # Log SIP credentials for debugging (obfuscate password)
+                _LOGGER.info(f"SIP credentials loaded: host={sip_creds.get('host')}, "
+                            f"port={sip_creds.get('port')}, "
+                            f"username={sip_creds.get('username')}, "
+                            f"protocol={sip_creds.get('protocol', 'unknown')}")
                 siedle_sip_config = SipConfig.from_dict(sip_creds)
                 
                 # Check for external SIP configuration
