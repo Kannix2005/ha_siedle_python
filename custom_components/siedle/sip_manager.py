@@ -49,10 +49,40 @@ class SipConfig:
     
     @classmethod
     def from_dict(cls, data: dict) -> "SipConfig":
-        """Create from dictionary."""
-        transport = data.get("transport", data.get("protocol", "udp")).lower()
-        if transport == "ssl":
+        """Create from dictionary.
+        
+        Siedle SIP config format (from /api/endpoint/v1/endpoint/config):
+        {
+            "host": "sus2-sip.siedle.com",
+            "port": 5061,
+            "username": "...",
+            "password": "...",
+            "protocol": "ssl"  # or "tls"
+        }
+        """
+        # Get transport - Siedle uses "ssl" or "protocol" field
+        transport = data.get("transport", data.get("protocol", "")).lower()
+        
+        # Default to TLS for Siedle SIP server (sus2-sip.siedle.com uses TLS on port 5061)
+        if not transport:
+            host = data.get("host", "")
+            port = data.get("port", 5060)
+            # Siedle server always uses TLS
+            if "siedle" in host.lower() or port == 5061:
+                transport = "tls"
+            else:
+                transport = "udp"
+        
+        # Normalize transport
+        if transport in ("ssl", "tls"):
             transport = "tls"
+        elif transport == "tcp":
+            transport = "tcp"
+        else:
+            transport = "udp"
+        
+        _LOGGER.debug(f"SipConfig.from_dict: host={data.get('host')}, port={data.get('port')}, transport={transport}")
+        
         return cls(
             host=data["host"],
             port=data.get("port", 5060),
@@ -480,15 +510,18 @@ class SipConnection:
         
         try:
             # Send initial REGISTER
+            _LOGGER.debug(f"{self.name}: Sending initial REGISTER...")
             register_msg = self._create_register(with_auth=False)
             self._socket.send(register_msg)
             
             response = self._socket.recv(4096)
             msg = self.parse_message(response)
+            _LOGGER.debug(f"{self.name}: Response: {msg.status_code} {msg.status_text}")
             
             if msg.status_code == 401 or msg.status_code == 407:
                 # Extract auth params
                 www_auth = msg.headers.get("WWW-Authenticate") or msg.headers.get("Proxy-Authenticate", "")
+                _LOGGER.debug(f"{self.name}: Auth header: {www_auth[:100]}...")
                 realm_match = re.search(r'realm="([^"]+)"', www_auth)
                 nonce_match = re.search(r'nonce="([^"]+)"', www_auth)
                 
@@ -558,10 +591,11 @@ class SipConnection:
     
     def _listen_loop(self):
         """Background listen loop."""
-        _LOGGER.info(f"{self.name}: Listen loop started")
+        _LOGGER.info(f"{self.name}: Listen loop started - waiting for incoming SIP messages...")
         while self._running:
             msg = self.recv(timeout=0.5)
             if msg and (msg.method or msg.status_code):
+                _LOGGER.debug(f"{self.name}: Received: method={msg.method}, status={msg.status_code}")
                 self._notify_callbacks(msg)
         _LOGGER.info(f"{self.name}: Listen loop ended")
     
@@ -663,6 +697,8 @@ class SipCallManager:
     
     def _handle_siedle_message(self, msg: SipMessage):
         """Handle message from Siedle SIP server."""
+        _LOGGER.debug(f"Siedle message: method={msg.method}, status={msg.status_code}, from={msg.from_header}")
+        
         if msg.is_request and msg.method == "INVITE":
             _LOGGER.warning(f"🔔 SIEDLE INVITE - DOORBELL! From: {msg.from_header}")
             
@@ -680,12 +716,19 @@ class SipCallManager:
                 "sdp": msg.body,
             }
             
+            _LOGGER.info(f"Doorbell data: caller_id={caller_id}, call_id={msg.call_id}")
+            
             # Notify doorbell callback
             if self._on_doorbell:
                 try:
+                    _LOGGER.debug("Calling doorbell callback...")
                     self._on_doorbell(data)
+                    _LOGGER.debug("Doorbell callback completed")
                 except Exception as e:
                     _LOGGER.error(f"Doorbell callback error: {e}")
+                    _LOGGER.exception(e)
+            else:
+                _LOGGER.warning("No doorbell callback registered!")
             
             # Store call info for forwarding
             self._siedle_call = SipCall(
@@ -893,13 +936,15 @@ class SipCallManager:
     def start(self) -> bool:
         """Start SIP manager."""
         _LOGGER.info("Starting SIP Call Manager...")
+        _LOGGER.info(f"Siedle SIP config: host={self.siedle_config.host}, port={self.siedle_config.port}, transport={self.siedle_config.transport.value}")
         
         # Connect to Siedle SIP
         self._siedle_conn = SipConnection(self.siedle_config, name="Siedle-SIP")
         if not self._siedle_conn.register():
-            _LOGGER.error("Failed to register with Siedle SIP")
+            _LOGGER.error("Failed to register with Siedle SIP server!")
             return False
         
+        _LOGGER.info("Registered with Siedle SIP - starting listen loop...")
         self._siedle_conn.add_callback(self._handle_siedle_message)
         self._siedle_conn.start_listen_loop()
         
