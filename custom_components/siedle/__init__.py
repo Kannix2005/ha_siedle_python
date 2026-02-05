@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.components.http import HomeAssistantView
+import homeassistant.helpers.config_validation as cv
 
 from .const import (
     DOMAIN,
@@ -40,6 +41,9 @@ from .siedle_api import Siedle
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.LOCK, Platform.SWITCH, Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON]
+
+# This integration is config entry only
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, config: dict):
