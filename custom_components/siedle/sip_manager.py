@@ -510,21 +510,24 @@ class SipConnection:
         
         try:
             # Send initial REGISTER
-            _LOGGER.debug(f"{self.name}: Sending initial REGISTER...")
+            _LOGGER.info(f"{self.name}: Sending initial REGISTER to {self.config.host}:{self.config.port}...")
             register_msg = self._create_register(with_auth=False)
+            _LOGGER.debug(f"{self.name}: REGISTER message:\n{register_msg.decode()[:500]}...")
             self._socket.send(register_msg)
             
             response = self._socket.recv(4096)
             msg = self.parse_message(response)
-            _LOGGER.debug(f"{self.name}: Response: {msg.status_code} {msg.status_text}")
+            _LOGGER.info(f"{self.name}: Response: {msg.status_code} {msg.status_text}")
             
             if msg.status_code == 401 or msg.status_code == 407:
                 # Extract auth params
                 www_auth = msg.headers.get("WWW-Authenticate") or msg.headers.get("Proxy-Authenticate", "")
+                _LOGGER.info(f"{self.name}: Auth required - extracting credentials from WWW-Authenticate header")
                 _LOGGER.debug(f"{self.name}: Auth header: {www_auth}")
                 
                 if not www_auth:
                     _LOGGER.error(f"{self.name}: No WWW-Authenticate header found! Headers: {list(msg.headers.keys())}")
+                    _LOGGER.error(f"{self.name}: Full response:\n{msg.raw[:1000]}")
                     return False
                 
                 realm_match = re.search(r'realm="([^"]+)"', www_auth)
@@ -533,16 +536,17 @@ class SipConnection:
                 if realm_match and nonce_match:
                     self._realm = realm_match.group(1)
                     self._nonce = nonce_match.group(1)
-                    _LOGGER.debug(f"{self.name}: Extracted realm={self._realm}, nonce={self._nonce[:20]}...")
+                    _LOGGER.info(f"{self.name}: Extracted realm={self._realm}, nonce={self._nonce[:20]}...")
                     
                     # Authenticated REGISTER
-                    _LOGGER.debug(f"{self.name}: Sending authenticated REGISTER...")
+                    _LOGGER.info(f"{self.name}: Sending authenticated REGISTER...")
                     auth_register = self._create_register(with_auth=True)
+                    _LOGGER.debug(f"{self.name}: Auth REGISTER message:\n{auth_register.decode()[:800]}...")
                     self._socket.send(auth_register)
                     
                     response = self._socket.recv(4096)
                     msg = self.parse_message(response)
-                    _LOGGER.debug(f"{self.name}: Auth response: {msg.status_code} {msg.status_text}")
+                    _LOGGER.info(f"{self.name}: Auth response: {msg.status_code} {msg.status_text}")
                     
                     if msg.status_code == 200:
                         _LOGGER.info(f"{self.name}: Registration successful!")
@@ -550,7 +554,7 @@ class SipConnection:
                         return True
                     else:
                         _LOGGER.error(f"{self.name}: Registration failed: {msg.status_code} {msg.status_text}")
-                        _LOGGER.debug(f"{self.name}: Response body: {msg.raw[:500]}")
+                        _LOGGER.error(f"{self.name}: Response body: {msg.raw[:500]}")
                         return False
                 else:
                     _LOGGER.error(f"{self.name}: Could not extract realm/nonce from: {www_auth}")
