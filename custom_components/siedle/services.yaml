@@ -1,0 +1,44 @@
+open_door:
+  name: Open Door
+  description: Open/unlock a Siedle door
+  fields:
+    contact_id:
+      name: Contact ID
+      description: ID of the door contact (optional, uses first door if not specified)
+      required: false
+      example: "12345678-1234-1234-1234-123456789012"
+      selector:
+        text:
+
+toggle_light:
+  name: Toggle Door Light
+  description: Toggle the light at a Siedle door
+  fields:
+    contact_id:
+      name: Contact ID
+      description: ID of the door contact (optional, uses first door if not specified)
+      required: false
+      example: "12345678-1234-1234-1234-123456789012"
+      selector:
+        text:
+
+activate_endpoint:
+  name: Activate Endpoint
+  description: Activate/pair the endpoint with the door station. Press the doorbell button when calling this service!
+  fields: {}
+
+hangup_call:
+  name: Hang Up Call
+  description: End the currently active call (doorbell or external)
+  fields: {}
+
+call_door:
+  name: Call Door Station
+  description: Initiate a call to the door station (intercom)
+  fields:
+    contact_id:
+      name: Contact ID
+      description: ID of the door contact (optional, uses first door if not specified)
+      required: false
+      selector:
+        text:

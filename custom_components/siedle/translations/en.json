@@ -1,0 +1,36 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Siedle Setup",
+        "description": "You will be redirected to scan the QR code from your Siedle app."
+      },
+      "qr_scan": {
+        "title": "Scan QR Code",
+        "description": "Please scan the QR code from your Siedle app using your phone's camera.\n\nAfter scanning, you will be redirected back automatically."
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Siedle. Please check the QR code data.",
+      "invalid_qr": "Invalid QR code data. Please try again.",
+      "unknown": "Unknown error occurred. Please try again."
+    },
+    "abort": {
+      "already_configured": "This Siedle device is already configured.",
+      "invalid_qr": "Invalid QR code data.",
+      "cannot_connect": "Cannot connect to Siedle server.",
+      "unknown": "Unknown error occurred."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Siedle Options",
+        "data": {
+          "enable_mqtt": "Enable MQTT (for SIP signaling)",
+          "enable_fcm": "Enable FCM Push (for doorbell notifications)"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,31 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Update manifest version
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          jq --arg version "$VERSION" '.version = $version' \
+            custom_components/siedle/manifest.json > tmp.json
+          mv tmp.json custom_components/siedle/manifest.json
+
+      - name: Create release artifact
+        run: |
+          cd custom_components
+          zip -r ../siedle.zip siedle
+
+      - name: Upload release artifact
+        uses: softprops/action-gh-release@v1
+        with:
+          files: siedle.zip

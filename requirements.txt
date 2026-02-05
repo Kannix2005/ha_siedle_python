@@ -1,0 +1,15 @@
+# Siedle Python Integration - Requirements
+
+# Core dependencies
+requests>=2.25.0
+requests-oauthlib>=1.3.0
+oauthlib>=3.1.0
+
+# AES decryption for setupData (REQUIRED for door/light control!)
+pycryptodome>=3.10.0
+
+# MQTT support for real-time events
+paho-mqtt>=1.6.0
+
+# Optional: Push notifications via Firebase Cloud Messaging
+push-receiver>=0.1.1
