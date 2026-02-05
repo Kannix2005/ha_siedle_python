@@ -1,0 +1,8 @@
+{
+  "name": "Siedle Door Intercom",
+  "render_readme": true,
+  "domains": ["lock", "switch", "sensor", "binary_sensor", "button"],
+  "homeassistant": "2024.1.0",
+  "iot_class": "cloud_push",
+  "country": ["DE", "AT", "CH"]
+}

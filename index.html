@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Siedle QR-Code Scanner</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 500px;
+            width: 100%;
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        #qr-reader {
+            width: 100%;
+            border-radius: 10px;
+            overflow: hidden;
+            background: #f0f0f0;
+            position: relative;
+        }
+        
+        #qr-reader video {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            font-size: 14px;
+        }
+        
+        .status.info {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        
+        .status.success {
+            background: #e8f5e9;
+            color: #388e3c;
+        }
+        
+        .status.error {
+            background: #ffebee;
+            color: #d32f2f;
+        }
+        
+        .status.warning {
+            background: #fff3e0;
+            color: #f57c00;
+        }
+        
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            border: 3px solid #667eea;
+            border-radius: 10px;
+            pointer-events: none;
+        }
+        
+        .scan-line {
+            position: absolute;
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #667eea, transparent);
+            animation: scan 2s linear infinite;
+        }
+        
+        @keyframes scan {
+            0% { top: 0; }
+            100% { top: 100%; }
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 25px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-top: 15px;
+            width: 100%;
+            transition: transform 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔐 Siedle QR-Code Scanner</h1>
+            <p>Scannen Sie Ihren Siedle QR-Code</p>
+        </div>
+        
+        <div class="content">
+            <div id="qr-reader"></div>
+            <div id="status" class="status info">
+                <div class="spinner"></div>
+                Kamera wird initialisiert...
+            </div>
+            <button id="retry-btn" style="display: none;">Erneut versuchen</button>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script>
+        // URL Parameter auslesen
+        const urlParams = new URLSearchParams(window.location.search);
+        const configFlowId = urlParams.get('config_flow_id');
+        const callbackUrl = urlParams.get('callback_url');
+        
+        const statusDiv = document.getElementById('status');
+        const retryBtn = document.getElementById('retry-btn');
+        let html5QrCode = null;
+        let isScanning = false;
+        
+        function updateStatus(message, type = 'info', showSpinner = false) {
+            statusDiv.className = `status ${type}`;
+            statusDiv.innerHTML = showSpinner 
+                ? `<div class="spinner"></div>${message}`
+                : message;
+        }
+        
+        function onScanSuccess(decodedText, decodedResult) {
+            if (isScanning) {
+                return; // Verhindere mehrfache Scans
+            }
+            isScanning = true;
+            
+            updateStatus('✅ QR-Code erfolgreich gescannt!', 'success');
+            
+            // Scanner stoppen
+            html5QrCode.stop().then(() => {
+                // Zu Home Assistant weiterleiten
+                if (callbackUrl && configFlowId) {
+                    updateStatus('🔄 Weiterleitung zu Home Assistant...', 'info', true);
+                    
+                    // URL-encode den QR-Code Inhalt
+                    const encodedResult = encodeURIComponent(decodedText);
+                    const redirectUrl = `${callbackUrl}?config_flow_id=${configFlowId}&result=${encodedResult}`;
+                    
+                    setTimeout(() => {
+                        window.location.href = redirectUrl;
+                    }, 1000);
+                } else {
+                    updateStatus('❌ Fehlende Parameter: callback_url oder config_flow_id', 'error');
+                    retryBtn.style.display = 'block';
+                }
+            }).catch(err => {
+                console.error('Error stopping scanner:', err);
+            });
+        }
+        
+        function onScanError(errorMessage) {
+            // Ignoriere normale Scan-Fehler (keine QR-Code gefunden)
+            // Diese werden bei jedem Frame ausgelöst, wenn kein Code gefunden wird
+        }
+        
+        function startScanner() {
+            // Parameter prüfen
+            if (!callbackUrl || !configFlowId) {
+                updateStatus('❌ Fehler: Fehlende URL-Parameter (callback_url oder config_flow_id)', 'error');
+                retryBtn.style.display = 'block';
+                return;
+            }
+            
+            updateStatus('📷 Kameraberechtigung wird angefordert...', 'info', true);
+            retryBtn.style.display = 'none';
+            
+            html5QrCode = new Html5Qrcode("qr-reader");
+            
+            // Kamera-Konfiguration: Bevorzuge rückwärtige Kamera
+            const config = {
+                fps: 10,
+                qrbox: { width: 250, height: 250 },
+                aspectRatio: 1.0
+            };
+            
+            // Versuche zuerst die rückwärtige Kamera
+            html5QrCode.start(
+                { facingMode: "environment" },
+                config,
+                onScanSuccess,
+                onScanError
+            ).then(() => {
+                updateStatus('📸 Bereit zum Scannen - Halten Sie den QR-Code vor die Kamera', 'info');
+                
+                // Scan-Animation hinzufügen
+                const reader = document.getElementById('qr-reader');
+                const overlay = document.createElement('div');
+                overlay.className = 'overlay';
+                const scanLine = document.createElement('div');
+                scanLine.className = 'scan-line';
+                overlay.appendChild(scanLine);
+                reader.appendChild(overlay);
+                
+            }).catch(err => {
+                console.error('Camera error:', err);
+                
+                // Fallback: Versuche irgendeine Kamera
+                Html5Qrcode.getCameras().then(cameras => {
+                    if (cameras && cameras.length > 0) {
+                        updateStatus('🔄 Starte Kamera...', 'warning', true);
+                        
+                        // Verwende die erste verfügbare Kamera
+                        html5QrCode.start(
+                            cameras[0].id,
+                            config,
+                            onScanSuccess,
+                            onScanError
+                        ).then(() => {
+                            updateStatus('📸 Bereit zum Scannen - Halten Sie den QR-Code vor die Kamera', 'info');
+                            
+                            const reader = document.getElementById('qr-reader');
+                            const overlay = document.createElement('div');
+                            overlay.className = 'overlay';
+                            const scanLine = document.createElement('div');
+                            scanLine.className = 'scan-line';
+                            overlay.appendChild(scanLine);
+                            reader.appendChild(overlay);
+                            
+                        }).catch(err2 => {
+                            console.error('Fallback camera error:', err2);
+                            updateStatus('❌ Kamera konnte nicht gestartet werden. Bitte erlauben Sie den Kamerazugriff.', 'error');
+                            retryBtn.style.display = 'block';
+                        });
+                    } else {
+                        updateStatus('❌ Keine Kamera gefunden', 'error');
+                        retryBtn.style.display = 'block';
+                    }
+                }).catch(err2 => {
+                    console.error('Get cameras error:', err2);
+                    updateStatus('❌ Fehler beim Zugriff auf die Kamera: ' + err2, 'error');
+                    retryBtn.style.display = 'block';
+                });
+            });
+        }
+        
+        // Retry Button
+        retryBtn.addEventListener('click', () => {
+            isScanning = false;
+            if (html5QrCode) {
+                html5QrCode.stop().then(() => {
+                    startScanner();
+                }).catch(() => {
+                    startScanner();
+                });
+            } else {
+                startScanner();
+            }
+        });
+        
+        // Automatisch starten wenn Seite geladen ist
+        window.addEventListener('load', () => {
+            setTimeout(startScanner, 500);
+        });
+    </script>
+</body>
+</html> 

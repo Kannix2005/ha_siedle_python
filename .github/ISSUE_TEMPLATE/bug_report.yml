@@ -1,0 +1,83 @@
+name: Bug Report
+description: Melde einen Fehler in der Siedle Integration
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke, dass du dir die Zeit nimmst, einen Fehler zu melden!
+        Bitte fülle das Formular so vollständig wie möglich aus.
+
+  - type: input
+    id: version
+    attributes:
+      label: Integration Version
+      description: Welche Version der Siedle Integration verwendest du?
+      placeholder: "z.B. 2.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant Version
+      description: Welche Version von Home Assistant verwendest du?
+      placeholder: "z.B. 2024.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation
+      description: Wie hast du die Integration installiert?
+      options:
+        - HACS
+        - Manuell
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Beschreibung
+      description: Was ist passiert? Was hast du erwartet?
+      placeholder: Beschreibe den Fehler so detailliert wie möglich
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Schritte zur Reproduktion
+      description: Wie kann der Fehler reproduziert werden?
+      placeholder: |
+        1. Gehe zu ...
+        2. Klicke auf ...
+        3. Fehler erscheint
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Füge relevante Logs hier ein. Aktiviere Debug-Logging mit:
+        ```yaml
+        logger:
+          logs:
+            custom_components.siedle: debug
+        ```
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Zusätzliche Informationen
+      description: Weitere relevante Informationen (Screenshots, Konfiguration, etc.)
+    validations:
+      required: false

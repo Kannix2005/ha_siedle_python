@@ -1,0 +1,97 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Siedle Setup",
+        "description": "You will be redirected to scan the QR code from your Siedle app."
+      },
+      "qr_scan": {
+        "title": "Scan QR Code",
+        "description": "Please scan the QR code from your Siedle app using your phone's camera.\n\nAfter scanning, you will be redirected back automatically."
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Siedle. Please check the QR code data.",
+      "invalid_qr": "Invalid QR code data. Please try again.",
+      "unknown": "Unknown error occurred. Please try again."
+    },
+    "abort": {
+      "already_configured": "This Siedle device is already configured.",
+      "invalid_qr": "Invalid QR code data.",
+      "cannot_connect": "Cannot connect to Siedle server.",
+      "unknown": "Unknown error occurred."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Siedle Options",
+        "description": "Configure the Siedle integration options.",
+        "menu_options": {
+          "general": "General Settings",
+          "external_sip": "External SIP Server",
+          "call_forwarding": "Call Forwarding",
+          "recording": "Recording"
+        }
+      },
+      "general": {
+        "title": "General Settings",
+        "description": "Configure basic integration settings.",
+        "data": {
+          "enable_mqtt": "Enable MQTT for device status",
+          "enable_sip": "Enable SIP for doorbell detection",
+          "enable_fcm": "Enable FCM push notifications (experimental)"
+        }
+      },
+      "external_sip": {
+        "title": "External SIP Server",
+        "description": "Configure an external SIP server (e.g., FritzBox, Asterisk) for call forwarding.\n\nExample hosts: fritz.box, asterisk.local, sipgate.de",
+        "data": {
+          "ext_sip_enabled": "Enable external SIP server",
+          "ext_sip_host": "SIP Server Host",
+          "ext_sip_port": "SIP Server Port",
+          "ext_sip_username": "SIP Username",
+          "ext_sip_password": "SIP Password",
+          "ext_sip_transport": "SIP Transport Protocol"
+        }
+      },
+      "call_forwarding": {
+        "title": "Call Forwarding",
+        "description": "Configure call forwarding between door station and external phones.\n\n**Forward to number**: Number to call when doorbell rings (e.g., **620 for FritzBox phone)\n**Forward from number**: Number that can call the door station",
+        "data": {
+          "forward_enabled": "Enable call forwarding",
+          "forward_to_number": "Forward doorbell to this number",
+          "forward_from_number": "Allow calls from this number to door",
+          "auto_answer": "Auto-answer door calls"
+        }
+      },
+      "recording": {
+        "title": "Recording",
+        "description": "Configure automatic recording when doorbell rings.",
+        "data": {
+          "recording_enabled": "Enable automatic recording",
+          "recording_duration": "Recording duration (seconds)",
+          "recording_path": "Recording path (relative to config)"
+        }
+      }
+    }
+  },
+  "services": {
+    "open_door": {
+      "name": "Open Door",
+      "description": "Opens the door lock."
+    },
+    "toggle_light": {
+      "name": "Toggle Light",
+      "description": "Toggles the door light."
+    },
+    "hangup_call": {
+      "name": "Hang Up",
+      "description": "Ends the active call."
+    },
+    "activate_endpoint": {
+      "name": "Activate Endpoint",
+      "description": "Activates/pairs the endpoint with the door station."
+    }
+  }
+}

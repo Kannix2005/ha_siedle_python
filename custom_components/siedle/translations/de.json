@@ -1,0 +1,97 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Siedle Einrichtung",
+        "description": "Sie werden zum QR-Code Scanner weitergeleitet."
+      },
+      "qr_scan": {
+        "title": "QR-Code scannen",
+        "description": "Bitte scannen Sie den QR-Code aus Ihrer Siedle App mit der Handy-Kamera.\n\nNach dem Scannen werden Sie automatisch zurückgeleitet."
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung zu Siedle fehlgeschlagen. Bitte überprüfen Sie die QR-Code-Daten.",
+      "invalid_qr": "Ungültige QR-Code Daten. Bitte versuchen Sie es erneut.",
+      "unknown": "Unbekannter Fehler. Bitte versuchen Sie es erneut."
+    },
+    "abort": {
+      "already_configured": "Dieses Siedle-Gerät ist bereits konfiguriert.",
+      "invalid_qr": "Ungültige QR-Code Daten.",
+      "cannot_connect": "Verbindung zum Siedle-Server nicht möglich.",
+      "unknown": "Unbekannter Fehler aufgetreten."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Siedle Optionen",
+        "description": "Konfigurieren Sie die Siedle-Integration.",
+        "menu_options": {
+          "general": "Allgemeine Einstellungen",
+          "external_sip": "Externer SIP Server",
+          "call_forwarding": "Anrufweiterleitung",
+          "recording": "Aufzeichnung"
+        }
+      },
+      "general": {
+        "title": "Allgemeine Einstellungen",
+        "description": "Grundlegende Integrationseinstellungen konfigurieren.",
+        "data": {
+          "enable_mqtt": "MQTT aktivieren (für Gerätestatus)",
+          "enable_sip": "SIP aktivieren (für Klingelerkennung)",
+          "enable_fcm": "FCM Push aktivieren (experimentell)"
+        }
+      },
+      "external_sip": {
+        "title": "Externer SIP Server",
+        "description": "Konfigurieren Sie einen externen SIP-Server (z.B. FritzBox, Asterisk) für die Anrufweiterleitung.\n\nBeispiele: fritz.box, asterisk.local, sipgate.de",
+        "data": {
+          "ext_sip_enabled": "Externen SIP-Server aktivieren",
+          "ext_sip_host": "SIP Server Adresse",
+          "ext_sip_port": "SIP Server Port",
+          "ext_sip_username": "SIP Benutzername",
+          "ext_sip_password": "SIP Passwort",
+          "ext_sip_transport": "SIP Transport-Protokoll"
+        }
+      },
+      "call_forwarding": {
+        "title": "Anrufweiterleitung",
+        "description": "Konfigurieren Sie die Anrufweiterleitung zwischen Türstation und externen Telefonen.\n\n**Weiterleitung an**: Nummer die bei Klingeln angerufen wird (z.B. **620 für FritzBox-Telefon)\n**Weiterleitung von**: Nummer die zur Tür anrufen darf",
+        "data": {
+          "forward_enabled": "Anrufweiterleitung aktivieren",
+          "forward_to_number": "Bei Klingeln diese Nummer anrufen",
+          "forward_from_number": "Anrufe von dieser Nummer zur Tür erlauben",
+          "auto_answer": "Tür-Anrufe automatisch annehmen"
+        }
+      },
+      "recording": {
+        "title": "Aufzeichnung",
+        "description": "Konfigurieren Sie die automatische Aufzeichnung bei Klingeln.",
+        "data": {
+          "recording_enabled": "Automatische Aufzeichnung aktivieren",
+          "recording_duration": "Aufzeichnungsdauer (Sekunden)",
+          "recording_path": "Aufzeichnungspfad (relativ zu config)"
+        }
+      }
+    }
+  },
+  "services": {
+    "open_door": {
+      "name": "Tür öffnen",
+      "description": "Öffnet das Türschloss."
+    },
+    "toggle_light": {
+      "name": "Licht schalten",
+      "description": "Schaltet das Türlicht um."
+    },
+    "hangup_call": {
+      "name": "Auflegen",
+      "description": "Beendet den aktiven Anruf."
+    },
+    "activate_endpoint": {
+      "name": "Endpoint aktivieren",
+      "description": "Aktiviert/koppelt den Endpoint mit der Türstation."
+    }
+  }
+}
