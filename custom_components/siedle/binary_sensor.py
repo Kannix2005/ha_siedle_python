@@ -11,9 +11,10 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.event import async_track_point_in_time
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 import homeassistant.util.dt as dt_util
 
-from .const import DOMAIN
+from .const import DOMAIN, SIGNAL_SIEDLE_CONNECTION_UPDATE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ async def async_setup_entry(
     entities = [
         SiedleDoorbellSensor(coordinator, entry, hass),
         SiedleMQTTConnectedSensor(coordinator, entry),
+        SiedleFCMConnectedSensor(coordinator, entry, hass),  # NEW: FCM connection status
     ]
     
     # Add a sensor for each door contact
@@ -182,10 +184,96 @@ class SiedleMQTTConnectedSensor(CoordinatorEntity, BinarySensorEntity):
             "manufacturer": "Siedle",
         }
 
+    async def async_added_to_hass(self) -> None:
+        """Register dispatcher listener for immediate updates."""
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, SIGNAL_SIEDLE_CONNECTION_UPDATE, self._handle_connection_update
+            )
+        )
+
+    @callback
+    def _handle_connection_update(self) -> None:
+        """Handle connection state change — update immediately."""
+        self.async_write_ha_state()
+
     @property
     def is_on(self):
-        """Return true if MQTT is connected."""
+        """Return true if MQTT is connected — read live from API."""
+        api = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {}).get("api")
+        if api:
+            return api.mqtt_connected
         return self.coordinator.data.get("mqtt_connected", False)
+
+
+class SiedleFCMConnectedSensor(CoordinatorEntity, BinarySensorEntity):
+    """Binary sensor showing FCM (Push Notification) connection status.
+    
+    FCM is the primary method for detecting doorbell rings!
+    """
+
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_has_entity_name = True
+    
+    def __init__(self, coordinator, entry, hass: HomeAssistant):
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._entry = entry
+        self._hass = hass
+        self._attr_unique_id = f"{entry.entry_id}_fcm_connected"
+        self._attr_name = "FCM Push Verbindung"
+        self._attr_icon = "mdi:bell-badge"
+
+    @property
+    def device_info(self):
+        """Return device information."""
+        return {
+            "identifiers": {(DOMAIN, self._entry.entry_id)},
+            "name": "Siedle Türstation",
+            "manufacturer": "Siedle",
+        }
+
+    async def async_added_to_hass(self) -> None:
+        """Register dispatcher listener for immediate updates."""
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, SIGNAL_SIEDLE_CONNECTION_UPDATE, self._handle_connection_update
+            )
+        )
+
+    @callback
+    def _handle_connection_update(self) -> None:
+        """Handle connection state change — update immediately."""
+        self.async_write_ha_state()
+
+    @property
+    def is_on(self):
+        """Return true if FCM is connected."""
+        fcm_handler = self._hass.data.get(DOMAIN, {}).get(
+            self._entry.entry_id, {}
+        ).get("fcm_handler")
+        
+        if fcm_handler:
+            return fcm_handler.is_connected
+        return False
+
+    @property
+    def extra_state_attributes(self):
+        """Return extra attributes."""
+        fcm_handler = self._hass.data.get(DOMAIN, {}).get(
+            self._entry.entry_id, {}
+        ).get("fcm_handler")
+        
+        attrs = {
+            "description": "FCM ist die Hauptmethode für Klingelerkennung"
+        }
+        
+        if fcm_handler:
+            attrs["fcm_token"] = fcm_handler.fcm_token[:30] + "..." if fcm_handler.fcm_token else None
+        
+        return attrs
 
 
 class SiedleDoorContactSensor(CoordinatorEntity, BinarySensorEntity):

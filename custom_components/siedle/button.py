@@ -33,10 +33,6 @@ async def async_setup_entry(
     if sip_manager:
         entities.append(SiedleHangupButton(entry, sip_manager))
     
-    # Add call door button if SIP manager is available
-    if sip_manager:
-        entities.append(SiedleCallDoorButton(entry, sip_manager))
-    
     async_add_entities(entities)
 
 
@@ -111,6 +107,21 @@ class SiedleHangupButton(SiedleButtonBase):
         super().__init__(entry)
         self._sip_manager = sip_manager
     
+    async def async_added_to_hass(self) -> None:
+        """Register state update callback when entity is added to HA."""
+        await super().async_added_to_hass()
+        
+        # Register callback for call state changes
+        if self._sip_manager:
+            def on_state_change(state, data):
+                """Update button availability when call state changes."""
+                _LOGGER.debug(f"Hangup button: Call state changed to {state.value if hasattr(state, 'value') else state}")
+                # Schedule state update in HA event loop
+                if self.hass:
+                    self.hass.add_job(self.async_write_ha_state)
+            
+            self._sip_manager.set_on_call_state_change(on_state_change)
+    
     async def async_press(self) -> None:
         """Handle button press."""
         _LOGGER.info("Hangup button pressed")
@@ -122,30 +133,3 @@ class SiedleHangupButton(SiedleButtonBase):
         if self._sip_manager:
             return self._sip_manager.is_call_active
         return False
-
-
-class SiedleCallDoorButton(SiedleButtonBase):
-    """Button to initiate call to door station."""
-    
-    _attr_name = "Türstation anrufen"
-    _attr_icon = "mdi:phone-outgoing"
-    _button_key = "call_door"
-    
-    def __init__(self, entry: ConfigEntry, sip_manager):
-        """Initialize call door button."""
-        super().__init__(entry)
-        self._sip_manager = sip_manager
-    
-    async def async_press(self) -> None:
-        """Handle button press."""
-        _LOGGER.info("Call door button pressed")
-        # TODO: Implement call to door station
-        # This would require SIP INVITE to the door station
-        pass
-    
-    @property
-    def available(self) -> bool:
-        """Return if button is available (no active call)."""
-        if self._sip_manager:
-            return not self._sip_manager.is_call_active
-        return True

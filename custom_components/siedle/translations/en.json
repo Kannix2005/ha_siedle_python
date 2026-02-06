@@ -26,9 +26,21 @@
     "step": {
       "init": {
         "title": "Siedle Options",
+        "menu_options": {
+          "general": "General Settings",
+          "external_sip": "External SIP Server",
+          "call_forwarding": "Call Forwarding",
+          "recording": "Recording"
+        }
+      },
+      "general": {
+        "title": "General Settings",
+        "description": "Configure basic integration settings.\n\n**FCM Push** is the most reliable method for doorbell detection (recommended!).",
         "data": {
-          "enable_mqtt": "Enable MQTT (for SIP signaling)",
-          "enable_fcm": "Enable FCM Push (for doorbell notifications)"
+          "fcm_enabled": "Enable FCM Push (recommended for doorbell detection!)",
+          "fcm_device_name": "Device name (shown in Siedle App)",
+          "enable_mqtt": "Enable MQTT (for device status)",
+          "enable_sip": "Enable SIP (for doorbell detection)"
         }
       }
     }

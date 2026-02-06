@@ -48,6 +48,11 @@ CONF_RECORDING_PATH = "recording_path"
 DEFAULT_RECORDING_DURATION = 30  # 30 Sekunden
 DEFAULT_RECORDING_PATH = "www/siedle_recordings"
 
+# ==================== FCM Configuration ====================
+CONF_FCM_ENABLED = "fcm_enabled"  # FCM-based doorbell detection (recommended!)
+CONF_FCM_DEVICE_NAME = "fcm_device_name"  # Device name shown in Siedle main app
+DEFAULT_FCM_DEVICE_NAME = "Home Assistant"
+
 # ==================== Call States ====================
 CALL_STATE_IDLE = "idle"
 CALL_STATE_RINGING = "ringing"
@@ -60,3 +65,6 @@ SIP_TRANSPORT_TCP = "tcp"
 SIP_TRANSPORT_TLS = "tls"
 
 SIP_TRANSPORTS = [SIP_TRANSPORT_UDP, SIP_TRANSPORT_TCP, SIP_TRANSPORT_TLS]
+
+# ==================== Dispatcher Signals ====================
+SIGNAL_SIEDLE_CONNECTION_UPDATE = f"{DOMAIN}_connection_update"
