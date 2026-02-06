@@ -290,9 +290,13 @@ class RtpBridge:
         self._running = False
         self._thread_a_to_b: Optional[threading.Thread] = None
         self._thread_b_to_a: Optional[threading.Thread] = None
+        self._thread_keepalive: Optional[threading.Thread] = None
         
         # Recording
         self._recorder: Optional[AudioRecorder] = None
+        
+        # SRTP Support
+        self._srtp_crypto: Optional[Any] = None
         
         # Statistics
         self._packets_a_to_b = 0
@@ -300,10 +304,54 @@ class RtpBridge:
         
         # Callbacks
         self._on_audio_received: Optional[Callable[[RtpPacket, str], None]] = None
+        self._on_recording_stopped: Optional[Callable[[], None]] = None
+    
+    def stun_discover_external_port(self) -> Tuple[Optional[str], Optional[int]]:
+        """Discover external IP and port via STUN using the actual RTP socket.
+        
+        This sends a STUN Binding Request from socket_a (the Siedle-facing RTP socket),
+        so the returned external port is the exact NAT mapping for this socket.
+        Must be called after setup() but before start().
+        
+        Returns:
+            (external_ip, external_port) or (None, None) on failure
+        """
+        if not self._socket_a:
+            _LOGGER.warning("Cannot run STUN - RTP socket not set up yet")
+            return None, None
+        
+        try:
+            from .stun_client import discover_external_address
+            ip, port = discover_external_address(local_socket=self._socket_a)
+            if ip and port:
+                _LOGGER.info(f"STUN from RTP socket: external {ip}:{port} (local port {self.local_port_a})")
+            else:
+                _LOGGER.warning(f"STUN from RTP socket failed (local port {self.local_port_a})")
+            return ip, port
+        except Exception as e:
+            _LOGGER.error(f"STUN discovery error: {e}")
+            return None, None
+
+    def set_srtp_crypto(self, crypto):
+        """Set SRTP crypto handler for decryption.
+        
+        Args:
+            crypto: SRTPCrypto instance
+        """
+        self._srtp_crypto = crypto
+        if crypto:
+            _LOGGER.info("SRTP decryption enabled for RTP bridge")
     
     def set_on_audio_received(self, callback: Callable[[RtpPacket, str], None]):
         """Set callback for received audio packets."""
         self._on_audio_received = callback
+    
+    def set_on_recording_stopped(self, callback: Callable[[], None]):
+        """Set callback for when recording stops (e.g., after duration expires).
+        
+        This allows the SIP manager to auto-hangup when recording finishes.
+        """
+        self._on_recording_stopped = callback
     
     def _allocate_port(self) -> Tuple[socket.socket, int]:
         """Allocate a UDP socket on a random available port."""
@@ -353,18 +401,149 @@ class RtpBridge:
             self._thread_b_to_a = threading.Thread(target=self._forward_b_to_a, daemon=True)
             self._thread_b_to_a.start()
         
+        # Start keepalive thread to send continuous RTP silence to Siedle
+        # This keeps the NAT pinhole open and signals we're an active endpoint
+        if self._remote_a:
+            self._thread_keepalive = threading.Thread(target=self._send_keepalive, daemon=True)
+            self._thread_keepalive.start()
+        
         _LOGGER.info("RTP Bridge started")
+    
+    def send_nat_punch(self, remote: Tuple[str, int], count: int = 3):
+        """Send NAT punch-through packets to open NAT for incoming RTP.
+        
+        Sends small dummy packets from our RTP socket to the remote endpoint.
+        This creates a NAT mapping that allows the remote side to send RTP 
+        packets back to us through the same NAT hole.
+        
+        This is similar to how PJSIP handles symmetric RTP behind NAT.
+        
+        Args:
+            remote: (host, port) of remote RTP endpoint
+            count: Number of punch-through packets to send
+        """
+        if not self._socket_a or not remote[0] or not remote[1]:
+            return
+        
+        try:
+            _LOGGER.info(f"Sending {count} NAT punch-through RTP packets to {remote[0]}:{remote[1]}")
+            
+            for i in range(count):
+                # Send a minimal valid RTP packet (header only, no payload)
+                # V=2, P=0, X=0, CC=0, M=0, PT=8 (PCMA), seq=0, ts=0, ssrc=random
+                import os
+                ssrc = int.from_bytes(os.urandom(4), 'big')
+                rtp_header = struct.pack("!BBHII",
+                    0x80,  # V=2, P=0, X=0, CC=0
+                    8,     # M=0, PT=8 (PCMA)
+                    i,     # sequence number
+                    0,     # timestamp
+                    ssrc,  # SSRC
+                )
+                # Add 160 bytes of silence (A-law silence = 0xD5)
+                silence = bytes([0xD5] * 160)
+                packet = rtp_header + silence
+                
+                self._socket_a.sendto(packet, remote)
+                time.sleep(0.02)  # 20ms between packets
+            
+            _LOGGER.info(f"NAT punch-through sent: {count} packets to {remote[0]}:{remote[1]}")
+        except Exception as e:
+            _LOGGER.error(f"NAT punch-through error: {e}")
+    
+    def _send_keepalive(self):
+        """Send continuous RTP silence to Siedle to keep NAT pinhole open.
+        
+        Sends A-law silence frames every 20ms. This:
+        1. Keeps the NAT mapping alive (UDP state table refresh)
+        2. Signals to Asterisk that we're an active media endpoint
+        3. Implements symmetric RTP (PJSIP does this by default)
+        """
+        if not self._socket_a or not self._remote_a:
+            return
+        
+        _LOGGER.info(f"RTP keepalive started: sending silence to {self._remote_a[0]}:{self._remote_a[1]} every 20ms")
+        
+        ssrc = int.from_bytes(os.urandom(4), 'big')
+        seq = 100  # Start after NAT punch sequences
+        ts = 0
+        packets_sent = 0
+        
+        try:
+            while self._running:
+                rtp_header = struct.pack("!BBHII",
+                    0x80,   # V=2, P=0, X=0, CC=0
+                    8,      # M=0, PT=8 (PCMA)
+                    seq & 0xFFFF,
+                    ts & 0xFFFFFFFF,
+                    ssrc,
+                )
+                silence = bytes([0xD5] * 160)  # A-law silence, 20ms at 8kHz
+                packet = rtp_header + silence
+                
+                self._socket_a.sendto(packet, self._remote_a)
+                
+                seq += 1
+                ts += 160  # 160 samples = 20ms at 8kHz
+                packets_sent += 1
+                
+                if packets_sent == 1:
+                    _LOGGER.info(f"First RTP keepalive packet sent to {self._remote_a}")
+                elif packets_sent == 50:  # After 1 second
+                    _LOGGER.info(f"RTP keepalive: {packets_sent} packets sent (1 second)")
+                elif packets_sent % 500 == 0:  # Every 10 seconds
+                    _LOGGER.debug(f"RTP keepalive: {packets_sent} packets sent")
+                
+                time.sleep(0.02)  # 20ms
+        except Exception as e:
+            if self._running:
+                _LOGGER.error(f"RTP keepalive error: {e}")
+        
+        _LOGGER.info(f"RTP keepalive stopped after {packets_sent} packets")
     
     def _forward_a_to_b(self):
         """Forward packets from A (Siedle) to B (External)."""
-        _LOGGER.debug("RTP forward A->B thread started")
+        _LOGGER.info(f"RTP forward A->B thread started - listening on port {self.local_port_a}, waiting for packets from {self._remote_a}...")
+        if self._srtp_crypto:
+            _LOGGER.info("SRTP decryption enabled - will decrypt incoming SRTP packets")
+        
+        packet_count = 0
+        decryption_errors = 0
+        last_log_time = time.time()
+        timeout_warning_shown = False
+        
         while self._running:
             try:
                 data, addr = self._socket_a.recvfrom(2048)
                 if data:
-                    packet = RtpPacket.parse(data)
+                    # Log first few packets for debugging
+                    if packet_count < 5:
+                        _LOGGER.info(f"✓ RTP packet received! From {addr}, size={len(data)} bytes")
+                    
+                    # Decrypt SRTP if enabled
+                    rtp_data = data
+                    if self._srtp_crypto:
+                        decrypted = self._srtp_crypto.decrypt_rtp(data)
+                        if decrypted:
+                            rtp_data = decrypted
+                            if packet_count < 3:
+                                _LOGGER.info(f"✓ SRTP decrypted: {len(data)} -> {len(rtp_data)} bytes")
+                        else:
+                            decryption_errors += 1
+                            if decryption_errors < 5:
+                                _LOGGER.warning(f"SRTP decryption failed for packet {packet_count}")
+                            continue  # Skip this packet
+                    
+                    packet = RtpPacket.parse(rtp_data)
                     if packet:
                         self._packets_a_to_b += 1
+                        packet_count += 1
+                        
+                        # Log every 10 seconds
+                        current_time = time.time()
+                        if current_time - last_log_time >= 10.0:
+                            _LOGGER.info(f"RTP: {packet_count} packets received, recording={self._recorder is not None}, decryption_errors={decryption_errors}")
+                            last_log_time = current_time
                         
                         # Record if enabled
                         if self._recorder:
@@ -372,19 +551,30 @@ class RtpBridge:
                         
                         # Forward to B if configured
                         if self._remote_b and self._socket_b:
-                            self._socket_b.sendto(data, self._remote_b)
+                            # Send decrypted RTP (not SRTP)
+                            self._socket_b.sendto(rtp_data, self._remote_b)
                         
                         # Notify callback
                         if self._on_audio_received:
                             self._on_audio_received(packet, "a")
+                    else:
+                        _LOGGER.warning(f"Failed to parse RTP packet from {addr}")
                             
             except socket.timeout:
+                # Show warning after 5 seconds of no packets
+                current_time = time.time()
+                if not timeout_warning_shown and current_time - last_log_time >= 5.0:
+                    _LOGGER.warning(f"⚠ No RTP packets received after 5 seconds - call established but no audio")
+                    _LOGGER.warning(f"Listening on port {self.local_port_a}, expecting packets from {self._remote_a}")
+                    if self._srtp_crypto:
+                        _LOGGER.warning("SRTP is enabled - waiting for encrypted packets")
+                    timeout_warning_shown = True
                 pass
             except Exception as e:
                 if self._running:
-                    _LOGGER.debug(f"RTP A->B error: {e}")
+                    _LOGGER.error(f"RTP A->B error: {e}", exc_info=True)
         
-        _LOGGER.debug("RTP forward A->B thread ended")
+        _LOGGER.info(f"RTP forward A->B thread ended - received {packet_count} packets total, {decryption_errors} decryption errors")
     
     def _forward_b_to_a(self):
         """Forward packets from B (External) to A (Siedle)."""
@@ -440,6 +630,12 @@ class RtpBridge:
                 time.sleep(duration)
                 if self._recorder and self._recorder.is_recording:
                     self.stop_recording()
+                    # Notify that recording has stopped (for auto-hangup)
+                    if self._on_recording_stopped:
+                        try:
+                            self._on_recording_stopped()
+                        except Exception as e:
+                            _LOGGER.error(f"Recording stopped callback error: {e}")
             
             threading.Thread(target=stop_after_duration, daemon=True).start()
         

@@ -29,6 +29,9 @@ from .const import (
     DEFAULT_RECORDING_DURATION,
     DEFAULT_RECORDING_PATH,
     SIP_TRANSPORTS,
+    CONF_FCM_ENABLED,
+    CONF_FCM_DEVICE_NAME,
+    DEFAULT_FCM_DEVICE_NAME,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -190,6 +193,14 @@ class SiedleOptionsFlowHandler(config_entries.OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Optional(
+                        CONF_FCM_ENABLED,
+                        default=self.config_entry.options.get(CONF_FCM_ENABLED, True),
+                    ): bool,
+                    vol.Optional(
+                        CONF_FCM_DEVICE_NAME,
+                        default=self.config_entry.options.get(CONF_FCM_DEVICE_NAME, DEFAULT_FCM_DEVICE_NAME),
+                    ): str,
+                    vol.Optional(
                         "enable_mqtt",
                         default=self.config_entry.options.get("enable_mqtt", True),
                     ): bool,
@@ -197,12 +208,11 @@ class SiedleOptionsFlowHandler(config_entries.OptionsFlow):
                         "enable_sip",
                         default=self.config_entry.options.get("enable_sip", True),
                     ): bool,
-                    vol.Optional(
-                        "enable_fcm",
-                        default=self.config_entry.options.get("enable_fcm", False),
-                    ): bool,
                 }
             ),
+            description_placeholders={
+                "fcm_description": "FCM ist die zuverlässigste Methode für Klingelerkennung (empfohlen!)",
+            },
         )
 
     async def async_step_external_sip(self, user_input=None):

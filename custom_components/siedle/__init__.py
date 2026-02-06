@@ -11,6 +11,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.components.http import HomeAssistantView
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
     DOMAIN,
@@ -35,12 +36,17 @@ from .const import (
     DEFAULT_EXT_SIP_TRANSPORT,
     DEFAULT_RECORDING_DURATION,
     DEFAULT_RECORDING_PATH,
+    CONF_FCM_ENABLED,
+    CONF_FCM_DEVICE_NAME,
+    DEFAULT_FCM_DEVICE_NAME,
+    SIGNAL_SIEDLE_CONNECTION_UPDATE,
 )
 from .siedle_api import Siedle
+from .fcm_handler import SiedleFCMHandler
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.LOCK, Platform.SWITCH, Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON]
+PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON]
 
 # This integration is config entry only
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -115,6 +121,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         "coordinator": coordinator,
         "sip_manager": None,
         "rtp_bridge": None,
+        "fcm_handler": None,
         "last_recording_sensor": None,
     }
 
@@ -158,7 +165,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 forward_enabled = entry.options.get(CONF_FORWARD_ENABLED, False)
                 forward_to = entry.options.get(CONF_FORWARD_TO_NUMBER) if forward_enabled else None
                 forward_from = entry.options.get(CONF_FORWARD_FROM_NUMBER) if forward_enabled else None
-                auto_answer = entry.options.get(CONF_AUTO_ANSWER, False)
+                
+                # Auto-answer if explicitly enabled OR if recording is enabled (can't record without answering)
+                recording_enabled = entry.options.get(CONF_RECORDING_ENABLED, False)
+                auto_answer = entry.options.get(CONF_AUTO_ANSWER, False) or recording_enabled
+                
+                if recording_enabled and not entry.options.get(CONF_AUTO_ANSWER, False):
+                    _LOGGER.info("Auto-answer enabled because recording is active")
+                
+                # Get recording settings
+                recording_path = None
+                recording_duration = None
+                if recording_enabled:
+                    base_path = entry.options.get(CONF_RECORDING_PATH, DEFAULT_RECORDING_PATH)
+                    recording_duration = entry.options.get(CONF_RECORDING_DURATION, DEFAULT_RECORDING_DURATION)
+                    # Build full path
+                    full_path = hass.config.path(base_path, "doorbell")
+                    # Ensure directory exists
+                    os.makedirs(full_path, exist_ok=True)
+                    recording_path = os.path.join(full_path, "doorbell")
+                    _LOGGER.info(f"Recording configured: path={recording_path}, duration={recording_duration}s")
                 
                 # Create SIP Call Manager
                 sip_manager = SipCallManager(
@@ -167,6 +193,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     forward_to_number=forward_to,
                     forward_from_number=forward_from,
                     auto_answer=auto_answer,
+                    recording_enabled=recording_enabled,
+                    recording_path=recording_path,
+                    recording_duration=recording_duration,
                 )
                 
                 # Create RTP Bridge
@@ -189,6 +218,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     hass.data[DOMAIN][entry.entry_id]["sip_manager"] = sip_manager
                     hass.data[DOMAIN][entry.entry_id]["rtp_bridge"] = rtp_bridge
                     _LOGGER.info("SIP Call Manager started successfully")
+                    # Notify sensors immediately that SIP is now connected
+                    async_dispatcher_send(hass, SIGNAL_SIEDLE_CONNECTION_UPDATE)
                 else:
                     _LOGGER.warning("SIP Call Manager failed to start - falling back to legacy SIP listener")
                     sip_manager = None
@@ -226,16 +257,53 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             siedle.connect_mqtt, 
             lambda topic, payload: _mqtt_callback(hass, entry, topic, payload)
         )
+        # Notify sensors that MQTT connection state may have changed
+        async_dispatcher_send(hass, SIGNAL_SIEDLE_CONNECTION_UPDATE)
 
-    # Start FCM Push listener if enabled (fallback for doorbell events)
-    # Note: May not work due to protobuf compatibility issues
-    if entry.options.get("enable_fcm", False):  # Disabled by default
-        fcm_credentials_file = hass.config.path(f".siedle_fcm_{entry.entry_id}.json")
-        await hass.async_add_executor_job(
-            siedle.start_fcm_listener,
-            lambda event_type, data: _fcm_callback(hass, entry, event_type, data),
-            fcm_credentials_file
-        )
+    # ============== Setup FCM Push Handler (Primary Doorbell Detection) ==============
+    # FCM is the most reliable way to detect doorbell rings!
+    # Start in background to not block config entry setup
+    if entry.options.get(CONF_FCM_ENABLED, True):  # Enabled by default!
+        async def _start_fcm_handler():
+            """Start FCM handler in background."""
+            try:
+                # Get access token for Siedle API
+                access_token = siedle._token.get("access_token") if siedle._token else None
+                
+                if access_token:
+                    # Get shared secret for name encryption
+                    shared_secret = siedle._sharedSecret if hasattr(siedle, '_sharedSecret') else None
+                    
+                    # Get device name from options, or use HA location name
+                    device_name = entry.options.get(
+                        CONF_FCM_DEVICE_NAME,
+                        hass.config.location_name or DEFAULT_FCM_DEVICE_NAME
+                    )
+                    
+                    fcm_handler = SiedleFCMHandler(
+                        hass=hass,
+                        entry_id=entry.entry_id,
+                        access_token=access_token,
+                        shared_secret=shared_secret,
+                        device_name=device_name,
+                    )
+                    
+                    started = await fcm_handler.async_start()
+                    if started:
+                        hass.data[DOMAIN][entry.entry_id]["fcm_handler"] = fcm_handler
+                        _LOGGER.info("✅ FCM doorbell detection started successfully!")
+                        # Notify sensors immediately that FCM is now connected
+                        async_dispatcher_send(hass, SIGNAL_SIEDLE_CONNECTION_UPDATE)
+                    else:
+                        _LOGGER.warning("Failed to start FCM handler - doorbell detection via FCM disabled")
+                else:
+                    _LOGGER.warning("No access token available for FCM registration")
+            except Exception as e:
+                _LOGGER.error(f"Failed to setup FCM handler: {e}")
+                _LOGGER.exception(e)
+        
+        # Start FCM in background - don't block setup
+        entry.async_create_background_task(hass, _start_fcm_handler(), "siedle_fcm_setup")
 
     # Register services
     await async_setup_services(hass, siedle)
@@ -261,13 +329,18 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
         if rtp_bridge:
             await hass.async_add_executor_job(rtp_bridge.stop)
         
+        # Stop FCM Handler
+        fcm_handler = data.get("fcm_handler")
+        if fcm_handler:
+            await fcm_handler.async_stop()
+        
         # Disconnect MQTT
         await hass.async_add_executor_job(api.disconnect_mqtt)
         
         # Stop legacy SIP listener (if used)
         await hass.async_add_executor_job(api.stop_sip_listener)
         
-        # Stop FCM listener
+        # Stop legacy FCM listener (if used)
         await hass.async_add_executor_job(api.stop_fcm_listener)
         
         hass.data[DOMAIN].pop(entry.entry_id)
@@ -278,6 +351,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
 def _mqtt_callback(hass: HomeAssistant, entry: ConfigEntry, topic: str, payload: dict):
     """Handle MQTT messages."""
     _LOGGER.debug("MQTT message: %s - %s", topic, payload)
+    
+    # Notify sensors of potential connection state change
+    async_dispatcher_send(hass, SIGNAL_SIEDLE_CONNECTION_UPDATE)
     
     # Fire event for automations
     hass.bus.fire(
@@ -341,38 +417,25 @@ def _sip_doorbell_callback(hass: HomeAssistant, entry: ConfigEntry, data: dict,
         },
     )
     
-    # Start recording if enabled
-    if entry.options.get(CONF_RECORDING_ENABLED, False):
-        recording_path = entry.options.get(CONF_RECORDING_PATH, DEFAULT_RECORDING_PATH)
-        recording_duration = entry.options.get(CONF_RECORDING_DURATION, DEFAULT_RECORDING_DURATION)
-        
-        # Build full path
-        full_path = hass.config.path(recording_path, "doorbell")
-        
-        try:
-            # Ensure directory exists
-            os.makedirs(full_path, exist_ok=True)
-            
-            # Start recording
-            filepath = rtp_bridge.start_recording(
-                os.path.join(full_path, "doorbell"),
-                duration=recording_duration
-            )
-            _LOGGER.info(f"Recording started: {filepath}")
-            
-            # Update recording sensor
-            entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
-            recording_sensor = entry_data.get("last_recording_sensor")
-            if recording_sensor:
-                recording_sensor.update_recording(filepath)
-                
-        except Exception as e:
-            _LOGGER.error(f"Failed to start recording: {e}")
+    # Recording is now handled automatically by SIP Manager when call is answered
+    # (see _answer_siedle_call in sip_manager.py)
 
 
 def _sip_state_callback(hass: HomeAssistant, entry: ConfigEntry, state, data: dict):
     """Handle SIP call state changes."""
     _LOGGER.info("SIP call state changed: %s - %s", state.value if hasattr(state, 'value') else state, data)
+    
+    # Notify sensors of connection/state change immediately
+    async_dispatcher_send(hass, SIGNAL_SIEDLE_CONNECTION_UPDATE)
+    
+    # Update recording sensor if recording file is available
+    if "recording_file" in data:
+        recording_file = data["recording_file"]
+        entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+        recording_sensor = entry_data.get("last_recording_sensor")
+        if recording_sensor:
+            _LOGGER.info(f"Updating recording sensor with file: {recording_file}")
+            recording_sensor.update_recording(recording_file)
     
     # Fire event for automations
     hass.bus.fire(
@@ -388,6 +451,9 @@ def _sip_state_callback(hass: HomeAssistant, entry: ConfigEntry, state, data: di
 def _fcm_callback(hass: HomeAssistant, entry: ConfigEntry, event_type: str, data: dict):
     """Handle FCM push notifications."""
     _LOGGER.info("FCM event: type=%s, data=%s", event_type, data)
+    
+    # Notify sensors of FCM connection state change immediately
+    async_dispatcher_send(hass, SIGNAL_SIEDLE_CONNECTION_UPDATE)
     
     # Fire event for automations
     hass.bus.fire(

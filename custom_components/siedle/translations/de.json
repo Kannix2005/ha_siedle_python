@@ -36,11 +36,12 @@
       },
       "general": {
         "title": "Allgemeine Einstellungen",
-        "description": "Grundlegende Integrationseinstellungen konfigurieren.",
+        "description": "Grundlegende Integrationseinstellungen konfigurieren.\n\n**FCM Push** ist die zuverlässigste Methode für Klingelerkennung (empfohlen!).",
         "data": {
+          "fcm_enabled": "FCM Push aktivieren (empfohlen für Klingelerkennung!)",
+          "fcm_device_name": "Gerätename (wird in Siedle App angezeigt)",
           "enable_mqtt": "MQTT aktivieren (für Gerätestatus)",
-          "enable_sip": "SIP aktivieren (für Klingelerkennung)",
-          "enable_fcm": "FCM Push aktivieren (experimentell)"
+          "enable_sip": "SIP aktivieren (für Klingelerkennung)"
         }
       },
       "external_sip": {

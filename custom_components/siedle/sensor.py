@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import (
     DOMAIN,
@@ -18,6 +19,7 @@ from .const import (
     CALL_STATE_RECORDING,
     CONF_RECORDING_PATH,
     DEFAULT_RECORDING_PATH,
+    SIGNAL_SIEDLE_CONNECTION_UPDATE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -91,16 +93,35 @@ class SiedleMQTTStatusSensor(CoordinatorEntity, SensorEntity):
             model="Smart Gateway",
         )
 
+    async def async_added_to_hass(self) -> None:
+        """Register dispatcher listener for immediate updates."""
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, SIGNAL_SIEDLE_CONNECTION_UPDATE, self._handle_connection_update
+            )
+        )
+
+    @callback
+    def _handle_connection_update(self) -> None:
+        """Handle connection state change — update immediately."""
+        self.async_write_ha_state()
+
     @property
     def native_value(self):
-        """Return the state of the sensor."""
-        return "Verbunden" if self.coordinator.data.get("mqtt_connected") else "Getrennt"
+        """Return the state of the sensor — read live from API."""
+        api = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {}).get("api")
+        if api:
+            return "Verbunden" if api.mqtt_connected else "Getrennt"
+        return self.coordinator.data.get("mqtt_connected", False) and "Verbunden" or "Getrennt"
 
     @property
     def extra_state_attributes(self):
         """Return extra attributes."""
+        api = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {}).get("api")
+        connected = api.mqtt_connected if api else self.coordinator.data.get("mqtt_connected", False)
         return {
-            "mqtt_connected": self.coordinator.data.get("mqtt_connected", False),
+            "mqtt_connected": connected,
         }
 
 
@@ -127,12 +148,39 @@ class SiedleSIPStatusSensor(CoordinatorEntity, SensorEntity):
             model="Smart Gateway",
         )
 
+    async def async_added_to_hass(self) -> None:
+        """Register dispatcher listener for immediate updates."""
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, SIGNAL_SIEDLE_CONNECTION_UPDATE, self._handle_connection_update
+            )
+        )
+
+    @callback
+    def _handle_connection_update(self) -> None:
+        """Handle connection state change — update immediately."""
+        self.async_write_ha_state()
+
     @property
     def native_value(self):
-        """Return the state of the sensor."""
-        data = self.coordinator.data or {}
-        sip_registered = data.get("sip_registered", False)
-        ext_sip_registered = data.get("ext_sip_registered", False)
+        """Return the state of the sensor — read live from SIP manager."""
+        entry_data = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
+        sip_manager = entry_data.get("sip_manager")
+        api = entry_data.get("api")
+        
+        sip_registered = False
+        ext_sip_registered = False
+        
+        if sip_manager:
+            if hasattr(sip_manager, '_siedle_conn') and sip_manager._siedle_conn:
+                sip_registered = sip_manager._siedle_conn.registered
+            if hasattr(sip_manager, '_external_conn') and sip_manager._external_conn:
+                ext_sip_registered = sip_manager._external_conn.registered
+        
+        # Fallback to API property
+        if not sip_registered and api:
+            sip_registered = api.sip_registered
         
         if sip_registered and ext_sip_registered:
             return "Beide verbunden"
@@ -145,10 +193,25 @@ class SiedleSIPStatusSensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self):
         """Return extra attributes."""
-        data = self.coordinator.data or {}
+        entry_data = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
+        sip_manager = entry_data.get("sip_manager")
+        api = entry_data.get("api")
+        
+        sip_registered = False
+        ext_sip_registered = False
+        
+        if sip_manager:
+            if hasattr(sip_manager, '_siedle_conn') and sip_manager._siedle_conn:
+                sip_registered = sip_manager._siedle_conn.registered
+            if hasattr(sip_manager, '_external_conn') and sip_manager._external_conn:
+                ext_sip_registered = sip_manager._external_conn.registered
+        
+        if not sip_registered and api:
+            sip_registered = api.sip_registered
+        
         return {
-            "siedle_sip_registered": data.get("sip_registered", False),
-            "external_sip_registered": data.get("ext_sip_registered", False),
+            "siedle_sip_registered": sip_registered,
+            "external_sip_registered": ext_sip_registered,
         }
 
 
@@ -173,7 +236,9 @@ class SiedleCallStatusSensor(SiedleSensorBase):
     def _on_state_change(self, state, data):
         """Handle call state changes."""
         self._call_info = data
-        self.async_write_ha_state()
+        # Schedule state update in HA event loop (thread-safe)
+        if self._hass:
+            self._hass.add_job(self.async_write_ha_state)
     
     @property
     def native_value(self) -> str:
@@ -237,7 +302,9 @@ class SiedleLastRecordingSensor(SiedleSensorBase):
         """Update with new recording."""
         self._last_recording_path = filepath
         self._last_recording_time = datetime.now()
-        self.async_write_ha_state()
+        # Schedule state update in HA event loop (thread-safe)
+        if self._hass:
+            self._hass.add_job(self.async_write_ha_state)
     
     @property
     def native_value(self):
