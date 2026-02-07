@@ -4,6 +4,8 @@
 [![GitHub Release](https://img.shields.io/github/release/Kannix2005/ha_siedle_python.svg)](https://github.com/Kannix2005/ha_siedle_python/releases)
 [![GitHub License](https://img.shields.io/github/license/Kannix2005/ha_siedle_python.svg)](LICENSE)
 
+🇩🇪 Deutsche Version | **[🇬🇧 English Version](README_EN.md)**
+
 Eine vollständige Home Assistant Integration für **Siedle IQ Türstationen (SUS2)** — vollständig reverse-engineered aus der offiziellen Siedle App.
 
 ## Features
@@ -145,6 +147,8 @@ Bei aktivierter Aufnahme wird der Anruf automatisch angenommen (Auto-Answer), di
 | Gerätename | HA Standortname | Name der in der Siedle App angezeigt wird |
 
 FCM ist die **primäre und zuverlässigste Methode** zur Klingelerkennung. Die Integration emuliert ein Android-Gerät und empfängt Firebase Cloud Messages direkt.
+
+> ⚠️ **Hinweis zu Push-Limits:** Die Siedle-Server senden bei mehrmaligem Klingeln innerhalb von **10 Minuten nur eine einzige Push-Nachricht**. Dies ist eine Limitierung des Siedle-Systems, nicht der Integration. Die Integration erkennt alle Klingelvorgänge über SIP INVITE — nur die FCM-Push-Benachrichtigung wird gedrosselt.
 
 ### Externer SIP-Server
 
