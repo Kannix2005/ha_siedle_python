@@ -1,0 +1,9 @@
+services:
+  asterisk:
+    build: .
+    container_name: siedle-test-asterisk
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+      - "10000-10100:10000-10100/udp"
+    restart: unless-stopped
