@@ -1,7 +1,9 @@
 """Support for Siedle sensors."""
 import logging
 import os
+from collections import deque
 from datetime import datetime
+from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
 from homeassistant.config_entries import ConfigEntry
@@ -19,6 +21,8 @@ from .const import (
     CALL_STATE_RECORDING,
     CONF_RECORDING_PATH,
     DEFAULT_RECORDING_PATH,
+    CONF_CALL_HISTORY_SIZE,
+    DEFAULT_CALL_HISTORY_SIZE,
     SIGNAL_SIEDLE_CONNECTION_UPDATE,
 )
 
@@ -46,6 +50,13 @@ async def async_setup_entry(
     
     # Add last recording sensor
     entities.append(SiedleLastRecordingSensor(entry, hass))
+    
+    # Add call history sensor (F4)
+    call_history_sensor = SiedleCallHistorySensor(entry, hass)
+    entities.append(call_history_sensor)
+    
+    # Store reference for updates from __init__.py
+    data["call_history_sensor"] = call_history_sensor
 
     async_add_entities(entities)
 
@@ -332,3 +343,103 @@ class SiedleLastRecordingSensor(SiedleSensorBase):
                     attrs["media_url"] = f"/local/{relative}"
         
         return attrs
+
+
+class SiedleCallHistorySensor(SiedleSensorBase):
+    """Sensor tracking call history with metadata (F4)."""
+    
+    _attr_name = "Anruf-Historie"
+    _attr_icon = "mdi:phone-log"
+    
+    def __init__(self, entry: ConfigEntry, hass: HomeAssistant):
+        """Initialize call history sensor."""
+        super().__init__(entry)
+        self._attr_unique_id = f"{entry.entry_id}_call_history"
+        self._hass = hass
+        max_size = entry.options.get(CONF_CALL_HISTORY_SIZE, DEFAULT_CALL_HISTORY_SIZE)
+        self._history: deque[dict[str, Any]] = deque(maxlen=max_size)
+        self._current_call: dict[str, Any] | None = None
+    
+    def start_call(self, data: dict[str, Any]) -> None:
+        """Record start of a new call (doorbell ring)."""
+        self._current_call = {
+            "timestamp": datetime.now().isoformat(),
+            "from": data.get("from", ""),
+            "caller_id": data.get("caller_id", ""),
+            "call_id": data.get("call_id", ""),
+            "source": data.get("source", "sip"),
+            "answered": False,
+            "duration_seconds": 0,
+            "recording_file": None,
+            "dtmf_door_opened": False,
+        }
+        self._current_call["_start_time"] = datetime.now()
+        if self._hass:
+            self._hass.add_job(self.async_write_ha_state)
+    
+    def call_answered(self, data: dict[str, Any] | None = None) -> None:
+        """Mark current call as answered."""
+        if self._current_call:
+            self._current_call["answered"] = True
+            if data and "recording_file" in data:
+                self._current_call["recording_file"] = data["recording_file"]
+            if self._hass:
+                self._hass.add_job(self.async_write_ha_state)
+    
+    def call_ended(self, data: dict[str, Any] | None = None) -> None:
+        """Record end of current call."""
+        if self._current_call:
+            start_time = self._current_call.pop("_start_time", None)
+            if start_time:
+                duration = (datetime.now() - start_time).total_seconds()
+                self._current_call["duration_seconds"] = round(duration, 1)
+            
+            if data and "recording_file" in data:
+                self._current_call["recording_file"] = data["recording_file"]
+            if data and "dtmf_door_opened" in data:
+                self._current_call["dtmf_door_opened"] = data["dtmf_door_opened"]
+            
+            self._history.append(self._current_call)
+            self._current_call = None
+            
+            if self._hass:
+                self._hass.add_job(self.async_write_ha_state)
+    
+    @property
+    def native_value(self) -> int:
+        """Return total number of calls in history."""
+        return len(self._history)
+    
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return call history as attributes."""
+        attrs: dict[str, Any] = {
+            "total_calls": len(self._history),
+            "calls_today": self._count_calls_today(),
+        }
+        
+        # Last 10 calls (newest first)
+        last_calls = list(self._history)[-10:]
+        last_calls.reverse()
+        attrs["last_calls"] = last_calls
+        
+        # Current call info
+        if self._current_call:
+            attrs["active_call"] = {
+                k: v for k, v in self._current_call.items()
+                if not k.startswith("_")
+            }
+        
+        return attrs
+    
+    def _count_calls_today(self) -> int:
+        """Count calls from today."""
+        today = datetime.now().date().isoformat()
+        return sum(
+            1 for call in self._history
+            if call.get("timestamp", "").startswith(today)
+        )
+    
+    def get_history(self) -> list[dict[str, Any]]:
+        """Get full call history (for diagnostics)."""
+        return list(self._history)

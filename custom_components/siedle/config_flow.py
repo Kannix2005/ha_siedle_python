@@ -32,6 +32,38 @@ from .const import (
     CONF_FCM_ENABLED,
     CONF_FCM_DEVICE_NAME,
     DEFAULT_FCM_DEVICE_NAME,
+    # F1: Call Timeout
+    CONF_FORWARD_TIMEOUT,
+    DEFAULT_FORWARD_TIMEOUT,
+    # F6: Time-Based Forwarding
+    CONF_FORWARD_SCHEDULE_ENABLED,
+    CONF_FORWARD_SCHEDULE_START,
+    CONF_FORWARD_SCHEDULE_END,
+    CONF_FORWARD_SCHEDULE_DAYS,
+    DEFAULT_FORWARD_SCHEDULE_START,
+    DEFAULT_FORWARD_SCHEDULE_END,
+    DEFAULT_FORWARD_SCHEDULE_DAYS,
+    # F7: Announcement
+    CONF_ANNOUNCEMENT_ENABLED,
+    CONF_ANNOUNCEMENT_FILE,
+    DEFAULT_ANNOUNCEMENT_FILE,
+    # F8: DTMF
+    CONF_DTMF_ENABLED,
+    CONF_DTMF_DOOR_CODE,
+    CONF_DTMF_LIGHT_CODE,
+    DEFAULT_DTMF_DOOR_CODE,
+    DEFAULT_DTMF_LIGHT_CODE,
+    # F13: FritzBox
+    CONF_FRITZBOX_ENABLED,
+    CONF_FRITZBOX_HOST,
+    CONF_FRITZBOX_USER,
+    CONF_FRITZBOX_PASSWORD,
+    CONF_FRITZBOX_PHONE_NUMBER,
+    DEFAULT_FRITZBOX_HOST,
+    DEFAULT_FRITZBOX_USER,
+    # F4: Call History
+    CONF_CALL_HISTORY_SIZE,
+    DEFAULT_CALL_HISTORY_SIZE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -177,7 +209,11 @@ class SiedleOptionsFlowHandler(config_entries.OptionsFlow):
                 "general": "Allgemeine Einstellungen",
                 "external_sip": "Externer SIP Server",
                 "call_forwarding": "Anrufweiterleitung",
+                "forward_schedule": "Zeitsteuerung Weiterleitung",
+                "dtmf_settings": "DTMF Türöffner",
+                "announcement": "Bitte-warten Ansage",
                 "recording": "Aufzeichnung",
+                "fritzbox": "FritzBox Integration",
             },
         )
 
@@ -262,7 +298,7 @@ class SiedleOptionsFlowHandler(config_entries.OptionsFlow):
         )
 
     async def async_step_call_forwarding(self, user_input=None):
-        """Call forwarding settings."""
+        """Call forwarding settings (incl. F1 timeout, F2 multi-target)."""
         if user_input is not None:
             new_options = {**self.config_entry.options, **user_input}
             return self.async_create_entry(title="", data=new_options)
@@ -284,13 +320,17 @@ class SiedleOptionsFlowHandler(config_entries.OptionsFlow):
                         default=self.config_entry.options.get(CONF_FORWARD_FROM_NUMBER, ""),
                     ): str,
                     vol.Optional(
+                        CONF_FORWARD_TIMEOUT,
+                        default=self.config_entry.options.get(CONF_FORWARD_TIMEOUT, DEFAULT_FORWARD_TIMEOUT),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=5, max=120)),
+                    vol.Optional(
                         CONF_AUTO_ANSWER,
                         default=self.config_entry.options.get(CONF_AUTO_ANSWER, False),
                     ): bool,
                 }
             ),
             description_placeholders={
-                "forward_to_help": "Nummer die bei Klingeln angerufen wird (z.B. **620 für FritzBox Telefon)",
+                "forward_to_help": "Kommasepariert für mehrere Ziele (z.B. **620,**621). Bei Timeout wird nacheinander probiert.",
                 "forward_from_help": "Nummer von der Anrufe zur Tür weitergeleitet werden",
             },
         )
@@ -317,9 +357,150 @@ class SiedleOptionsFlowHandler(config_entries.OptionsFlow):
                         CONF_RECORDING_PATH,
                         default=self.config_entry.options.get(CONF_RECORDING_PATH, DEFAULT_RECORDING_PATH),
                     ): str,
+                    vol.Optional(
+                        CONF_CALL_HISTORY_SIZE,
+                        default=self.config_entry.options.get(CONF_CALL_HISTORY_SIZE, DEFAULT_CALL_HISTORY_SIZE),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=10, max=500)),
                 }
             ),
             description_placeholders={
                 "path_help": "Relativer Pfad im HA config Ordner (z.B. www/siedle_recordings)",
             },
+        )
+
+    async def async_step_forward_schedule(self, user_input=None):
+        """Time-based forwarding schedule (F6)."""
+        if user_input is not None:
+            # Convert days string list to int list
+            if CONF_FORWARD_SCHEDULE_DAYS in user_input:
+                user_input[CONF_FORWARD_SCHEDULE_DAYS] = [
+                    int(d) for d in user_input[CONF_FORWARD_SCHEDULE_DAYS]
+                ]
+            new_options = {**self.config_entry.options, **user_input}
+            return self.async_create_entry(title="", data=new_options)
+
+        current_days = self.config_entry.options.get(
+            CONF_FORWARD_SCHEDULE_DAYS, DEFAULT_FORWARD_SCHEDULE_DAYS
+        )
+        # Convert to string list for selector
+        days_str = [str(d) for d in current_days]
+
+        return self.async_show_form(
+            step_id="forward_schedule",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_FORWARD_SCHEDULE_ENABLED,
+                        default=self.config_entry.options.get(CONF_FORWARD_SCHEDULE_ENABLED, False),
+                    ): bool,
+                    vol.Optional(
+                        CONF_FORWARD_SCHEDULE_START,
+                        default=self.config_entry.options.get(CONF_FORWARD_SCHEDULE_START, DEFAULT_FORWARD_SCHEDULE_START),
+                    ): str,
+                    vol.Optional(
+                        CONF_FORWARD_SCHEDULE_END,
+                        default=self.config_entry.options.get(CONF_FORWARD_SCHEDULE_END, DEFAULT_FORWARD_SCHEDULE_END),
+                    ): str,
+                    vol.Optional(
+                        CONF_FORWARD_SCHEDULE_DAYS,
+                        default=days_str,
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                selector.SelectOptionDict(value="0", label="Montag"),
+                                selector.SelectOptionDict(value="1", label="Dienstag"),
+                                selector.SelectOptionDict(value="2", label="Mittwoch"),
+                                selector.SelectOptionDict(value="3", label="Donnerstag"),
+                                selector.SelectOptionDict(value="4", label="Freitag"),
+                                selector.SelectOptionDict(value="5", label="Samstag"),
+                                selector.SelectOptionDict(value="6", label="Sonntag"),
+                            ],
+                            multiple=True,
+                            mode=selector.SelectSelectorMode.LIST,
+                        )
+                    ),
+                }
+            ),
+        )
+
+    async def async_step_dtmf_settings(self, user_input=None):
+        """DTMF door opener settings (F8)."""
+        if user_input is not None:
+            new_options = {**self.config_entry.options, **user_input}
+            return self.async_create_entry(title="", data=new_options)
+
+        return self.async_show_form(
+            step_id="dtmf_settings",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_DTMF_ENABLED,
+                        default=self.config_entry.options.get(CONF_DTMF_ENABLED, False),
+                    ): bool,
+                    vol.Optional(
+                        CONF_DTMF_DOOR_CODE,
+                        default=self.config_entry.options.get(CONF_DTMF_DOOR_CODE, DEFAULT_DTMF_DOOR_CODE),
+                    ): str,
+                    vol.Optional(
+                        CONF_DTMF_LIGHT_CODE,
+                        default=self.config_entry.options.get(CONF_DTMF_LIGHT_CODE, DEFAULT_DTMF_LIGHT_CODE),
+                    ): str,
+                }
+            ),
+        )
+
+    async def async_step_announcement(self, user_input=None):
+        """Announcement / please-wait settings (F7)."""
+        if user_input is not None:
+            new_options = {**self.config_entry.options, **user_input}
+            return self.async_create_entry(title="", data=new_options)
+
+        return self.async_show_form(
+            step_id="announcement",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_ANNOUNCEMENT_ENABLED,
+                        default=self.config_entry.options.get(CONF_ANNOUNCEMENT_ENABLED, False),
+                    ): bool,
+                    vol.Optional(
+                        CONF_ANNOUNCEMENT_FILE,
+                        default=self.config_entry.options.get(CONF_ANNOUNCEMENT_FILE, DEFAULT_ANNOUNCEMENT_FILE),
+                    ): str,
+                }
+            ),
+        )
+
+    async def async_step_fritzbox(self, user_input=None):
+        """FritzBox click-to-dial settings (F13)."""
+        if user_input is not None:
+            new_options = {**self.config_entry.options, **user_input}
+            return self.async_create_entry(title="", data=new_options)
+
+        return self.async_show_form(
+            step_id="fritzbox",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_FRITZBOX_ENABLED,
+                        default=self.config_entry.options.get(CONF_FRITZBOX_ENABLED, False),
+                    ): bool,
+                    vol.Optional(
+                        CONF_FRITZBOX_HOST,
+                        default=self.config_entry.options.get(CONF_FRITZBOX_HOST, DEFAULT_FRITZBOX_HOST),
+                    ): str,
+                    vol.Optional(
+                        CONF_FRITZBOX_USER,
+                        default=self.config_entry.options.get(CONF_FRITZBOX_USER, DEFAULT_FRITZBOX_USER),
+                    ): str,
+                    vol.Optional(
+                        CONF_FRITZBOX_PASSWORD,
+                        default=self.config_entry.options.get(CONF_FRITZBOX_PASSWORD, ""),
+                    ): str,
+                    vol.Optional(
+                        CONF_FRITZBOX_PHONE_NUMBER,
+                        default=self.config_entry.options.get(CONF_FRITZBOX_PHONE_NUMBER, ""),
+                    ): str,
+                }
+            ),
         )

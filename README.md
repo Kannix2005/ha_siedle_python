@@ -12,13 +12,22 @@ Eine vollständige Home Assistant Integration für **Siedle IQ Türstationen (SU
 - 💡 **Türlicht** — Schalte das Licht an der Türstation
 - 🔔 **Klingelerkennung** — Sofortige Erkennung via FCM Push-Benachrichtigungen und SIP INVITE
 - 🎙️ **Audio-Aufnahme** — Automatische Aufzeichnung des Türgesprächs als WAV-Datei (SRTP → PCM)
+- 📱 **SIP-Weiterleitung** — Türklingel an ein externes SIP-Telefon weiterleiten (z.B. FritzBox, Asterisk, MicroSIP)
+- 🔊 **Bidirektionale Audio-Brücke** — Gegensprechen mit der Tür über externes SIP-Telefon (SRTP ↔ RTP)
+- ⏱️ **Anruf-Timeout & Fallback** — Automatischer Timeout pro Weiterleitungsziel, dann nächstes Ziel (F1)
+- 📞 **Mehrere Weiterleitungsziele** — Kommaseparierte Nummern, wird sequentiell durchprobiert (F2)
+- 📊 **Anruf-Historie** — Sensor mit den letzten X Anrufen inkl. Zeitstempel, Anrufer, Dauer (F4)
+- 🕐 **Zeitgesteuerte Weiterleitung** — Weiterleitung nur zu bestimmten Uhrzeiten/Wochentagen (F6)
+- 🔈 **Bitte-Warten-Ansage** — WAV-Datei oder Signalton abspielen während Verbindungsaufbau (F7)
+- 🔢 **DTMF Türöffner** — Tür per Telefon-Tastendruck (z.B. #) während Gespräch öffnen (F8)
+- 🎵 **Media Source** — Aufnahmen direkt in HA Media Browser abspielen (F9)
+- 🔍 **Diagnostics** — Vollständiger Systemstatus für Fehlersuche (F10)
+- 🔘 **Mehrere Klingeltaster** — Unterscheidung verschiedener Türstations-Klingelknöpfe (F12)
+- 📡 **Fritz!Box Click-to-Dial** — DECT-Telefone über FR!TZBox klingeln lassen per TR-064 (F13)
+- 📷 **Kamera-Entity** — Stub für zukünftige Türkamera-Integration (F14)
 - ❌ **Auflegen-Button** — Beende aktive Anrufe direkt aus Home Assistant
 - 📊 **Status-Sensoren** — SIP, MQTT, FCM Verbindungsstatus, Anrufstatus, Türkontakte
 - 🔒 **Sichere Kommunikation** — SIP über TLS, Audio über SRTP (AES-CM-128-HMAC-SHA1-80)
-
-### Geplante Features
-- 📱 **SIP-Weiterleitung** — Türklingel an ein externes SIP-Telefon weiterleiten (z.B. FritzBox DECT-Telefon)
-- 🔊 **Bidirektionale Audio-Brücke** — Gegensprechen über externes Telefon
 
 ---
 
@@ -81,7 +90,8 @@ Oder manuell in HACS:
 Nach erfolgreicher Einrichtung kannst du in den Integrations-Optionen folgendes aktivieren:
 - **Automatische Aufnahme**: Zeichnet das Türgespräch als WAV auf
 - **FCM Push**: Klingelerkennung (standardmäßig aktiv)
-- **Externer SIP-Server**: Für zukünftige Anrufweiterleitung (noch in Entwicklung)
+- **Externer SIP-Server**: Anrufweiterleitung an FritzBox, Asterisk & Co.
+- **Anrufweiterleitung**: Türklingel an externes SIP-Telefon mit bidirektionalem Audio
 
 
 ## Entitäten
@@ -136,7 +146,7 @@ Bei aktivierter Aufnahme wird der Anruf automatisch angenommen (Auto-Answer), di
 
 FCM ist die **primäre und zuverlässigste Methode** zur Klingelerkennung. Die Integration emuliert ein Android-Gerät und empfängt Firebase Cloud Messages direkt.
 
-### Externer SIP-Server (in Entwicklung)
+### Externer SIP-Server
 
 | Option | Standard | Beschreibung |
 |--------|----------|--------------|
@@ -147,7 +157,7 @@ FCM ist die **primäre und zuverlässigste Methode** zur Klingelerkennung. Die I
 | Passwort | — | SIP-Passwort |
 | Transport | UDP | UDP, TCP oder TLS |
 
-### Anrufweiterleitung (in Entwicklung)
+### Anrufweiterleitung
 
 | Option | Standard | Beschreibung |
 |--------|----------|--------------|
@@ -321,10 +331,9 @@ logger:
 
 ## Bekannte Einschränkungen
 
-- **Kein Gegensprechen:** Aktuell wird nur Audio von der Türstation empfangen (Aufnahme). Senden von Audio zur Tür ist noch nicht implementiert.
 - **Keine Video-Unterstützung:** Siedle SUS2 überträgt kein Video über SIP — das Kamerabild wird nur in der offiziellen App angezeigt.
-- **SIP-Weiterleitung:** Die Weiterleitung an externe SIP-Server (z.B. FritzBox) ist noch in Entwicklung.
 - **Nur ein aktiver Anruf:** Die Integration unterstützt nur einen gleichzeitigen Anruf.
+- **Cloud-Abhängigkeit:** Alle Kommunikation läuft über Siedle Cloud-Server — kein lokaler Fallback möglich.
 
 ---
 

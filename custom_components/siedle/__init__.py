@@ -40,13 +40,48 @@ from .const import (
     CONF_FCM_DEVICE_NAME,
     DEFAULT_FCM_DEVICE_NAME,
     SIGNAL_SIEDLE_CONNECTION_UPDATE,
+    # F1: Forward timeout
+    CONF_FORWARD_TIMEOUT,
+    DEFAULT_FORWARD_TIMEOUT,
+    # F2: Multi-target (uses CONF_FORWARD_TO_NUMBER)
+    # F6: Schedule
+    CONF_FORWARD_SCHEDULE_ENABLED,
+    CONF_FORWARD_SCHEDULE_START,
+    CONF_FORWARD_SCHEDULE_END,
+    CONF_FORWARD_SCHEDULE_DAYS,
+    DEFAULT_FORWARD_SCHEDULE_START,
+    DEFAULT_FORWARD_SCHEDULE_END,
+    DEFAULT_FORWARD_SCHEDULE_DAYS,
+    # F7: Announcement
+    CONF_ANNOUNCEMENT_ENABLED,
+    CONF_ANNOUNCEMENT_FILE,
+    DEFAULT_ANNOUNCEMENT_FILE,
+    # F8: DTMF
+    CONF_DTMF_ENABLED,
+    CONF_DTMF_DOOR_CODE,
+    CONF_DTMF_LIGHT_CODE,
+    DEFAULT_DTMF_DOOR_CODE,
+    DEFAULT_DTMF_LIGHT_CODE,
+    # F12: Multi-button
+    CONF_DOORBELL_BUTTONS,
+    # F4: Call history
+    CONF_CALL_HISTORY_SIZE,
+    DEFAULT_CALL_HISTORY_SIZE,
+    # F13: FritzBox
+    CONF_FRITZBOX_ENABLED,
+    CONF_FRITZBOX_HOST,
+    CONF_FRITZBOX_USER,
+    CONF_FRITZBOX_PASSWORD,
+    CONF_FRITZBOX_PHONE_NUMBER,
+    DEFAULT_FRITZBOX_HOST,
+    DEFAULT_FRITZBOX_USER,
 )
 from .siedle_api import Siedle
 from .fcm_handler import SiedleFCMHandler
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON]
+PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON, Platform.CAMERA]
 
 # This integration is config entry only
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -137,6 +172,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         "rtp_bridge": None,
         "fcm_handler": None,
         "last_recording_sensor": None,
+        "call_history_sensor": None,
+        "fritzbox_dialer": None,
     }
 
     # ============== Setup SIP Call Manager ==============
@@ -210,7 +247,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     recording_enabled=recording_enabled,
                     recording_path=recording_path,
                     recording_duration=recording_duration,
+                    # F1: Forward timeout
+                    forward_timeout=entry.options.get(CONF_FORWARD_TIMEOUT, DEFAULT_FORWARD_TIMEOUT),
+                    # F6: Schedule
+                    forward_schedule_enabled=entry.options.get(CONF_FORWARD_SCHEDULE_ENABLED, False),
+                    forward_schedule_start=entry.options.get(CONF_FORWARD_SCHEDULE_START, DEFAULT_FORWARD_SCHEDULE_START),
+                    forward_schedule_end=entry.options.get(CONF_FORWARD_SCHEDULE_END, DEFAULT_FORWARD_SCHEDULE_END),
+                    forward_schedule_days=entry.options.get(CONF_FORWARD_SCHEDULE_DAYS, DEFAULT_FORWARD_SCHEDULE_DAYS),
+                    # F7: Announcement
+                    announcement_enabled=entry.options.get(CONF_ANNOUNCEMENT_ENABLED, False),
+                    announcement_file=entry.options.get(CONF_ANNOUNCEMENT_FILE, DEFAULT_ANNOUNCEMENT_FILE),
+                    # F8: DTMF
+                    dtmf_enabled=entry.options.get(CONF_DTMF_ENABLED, False),
+                    dtmf_door_code=entry.options.get(CONF_DTMF_DOOR_CODE, DEFAULT_DTMF_DOOR_CODE),
+                    dtmf_light_code=entry.options.get(CONF_DTMF_LIGHT_CODE, DEFAULT_DTMF_LIGHT_CODE),
+                    # F12: Multi-button
+                    doorbell_buttons=entry.options.get(CONF_DOORBELL_BUTTONS, {}),
                 )
+                
+                # Give SIP manager access to Siedle API (for DTMF door opener)
+                sip_manager.siedle_api = siedle
                 
                 # Create RTP Bridge
                 rtp_bridge = RtpBridge()
@@ -223,6 +279,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 sip_manager.set_on_call_state_change(
                     lambda state, data: _sip_state_callback(hass, entry, state, data)
                 )
+                
+                # Wire DTMF action callback (F8) — fires HA events when DTMF actions are executed
+                if entry.options.get(CONF_DTMF_ENABLED, False):
+                    def _dtmf_action_callback(action: str, code: str):
+                        _LOGGER.info("DTMF action: %s (code=%s)", action, code)
+                        hass.loop.call_soon_threadsafe(
+                            hass.bus.async_fire,
+                            f"{DOMAIN}_dtmf_action",
+                            {
+                                "action": action,
+                                "code": code,
+                                "entry_id": entry.entry_id,
+                            },
+                        )
+                    sip_manager.set_on_dtmf_action(_dtmf_action_callback)
                 
                 # Start SIP manager in background
                 _LOGGER.info("Starting new SIP Call Manager...")
@@ -319,6 +390,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         # Start FCM in background - don't block setup
         entry.async_create_background_task(hass, _start_fcm_handler(), "siedle_fcm_setup")
 
+    # ============== Setup Fritz!Box Dialer (F13) ==============
+    if entry.options.get(CONF_FRITZBOX_ENABLED, False):
+        try:
+            from .fritzbox import FritzBoxDialer
+            
+            fritzbox_dialer = FritzBoxDialer(
+                host=entry.options.get(CONF_FRITZBOX_HOST, DEFAULT_FRITZBOX_HOST),
+                username=entry.options.get(CONF_FRITZBOX_USER, DEFAULT_FRITZBOX_USER),
+                password=entry.options.get(CONF_FRITZBOX_PASSWORD, ""),
+                phone_number=entry.options.get(CONF_FRITZBOX_PHONE_NUMBER, ""),
+            )
+            hass.data[DOMAIN][entry.entry_id]["fritzbox_dialer"] = fritzbox_dialer
+            _LOGGER.info("Fritz!Box dialer configured: %s", entry.options.get(CONF_FRITZBOX_HOST))
+        except Exception as e:
+            _LOGGER.error("Failed to setup Fritz!Box dialer: %s", e)
+
     # Register services
     await async_setup_services(hass, siedle)
 
@@ -348,6 +435,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
         if fcm_handler:
             await fcm_handler.async_stop()
         
+        # Close Fritz!Box session (F13)
+        fritzbox_dialer = data.get("fritzbox_dialer")
+        if fritzbox_dialer:
+            await fritzbox_dialer.close()
+        
         # Disconnect MQTT
         await hass.async_add_executor_job(api.disconnect_mqtt)
         
@@ -363,14 +455,17 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
 
 
 def _mqtt_callback(hass: HomeAssistant, entry: ConfigEntry, topic: str, payload: dict):
-    """Handle MQTT messages."""
+    """Handle MQTT messages (called from MQTT thread)."""
     _LOGGER.debug("MQTT message: %s - %s", topic, payload)
     
-    # Notify sensors of potential connection state change
-    async_dispatcher_send(hass, SIGNAL_SIEDLE_CONNECTION_UPDATE)
+    # Thread-safe: schedule on event loop
+    hass.loop.call_soon_threadsafe(
+        async_dispatcher_send, hass, SIGNAL_SIEDLE_CONNECTION_UPDATE
+    )
     
-    # Fire event for automations
-    hass.bus.fire(
+    # Fire event for automations (thread-safe)
+    hass.loop.call_soon_threadsafe(
+        hass.bus.async_fire,
         f"{DOMAIN}_event",
         {
             "type": "mqtt",
@@ -382,11 +477,12 @@ def _mqtt_callback(hass: HomeAssistant, entry: ConfigEntry, topic: str, payload:
 
 
 def _sip_callback(hass: HomeAssistant, entry: ConfigEntry, event_type: str, data: dict):
-    """Handle SIP doorbell events - THIS IS THE MAIN DOORBELL DETECTION!"""
+    """Handle SIP doorbell events (called from SIP thread) - THIS IS THE MAIN DOORBELL DETECTION!"""
     _LOGGER.info("🔔 SIP DOORBELL event: type=%s, data=%s", event_type, data)
     
-    # Fire event for automations
-    hass.bus.fire(
+    # Fire event for automations (thread-safe)
+    hass.loop.call_soon_threadsafe(
+        hass.bus.async_fire,
         f"{DOMAIN}_event",
         {
             "type": "sip",
@@ -397,9 +493,10 @@ def _sip_callback(hass: HomeAssistant, entry: ConfigEntry, event_type: str, data
         },
     )
     
-    # Fire specific doorbell event
+    # Fire specific doorbell event (thread-safe)
     if event_type == "doorbell":
-        hass.bus.fire(
+        hass.loop.call_soon_threadsafe(
+            hass.bus.async_fire,
             f"{DOMAIN}_doorbell",
             {
                 "source": "sip",
@@ -418,8 +515,22 @@ def _sip_doorbell_callback(hass: HomeAssistant, entry: ConfigEntry, data: dict,
     """
     _LOGGER.info("🔔🔔🔔 DOORBELL! From: %s", data.get("from", "unknown"))
     
-    # Fire HA event
-    hass.bus.fire(
+    # Update call history sensor (F4)
+    entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+    call_history_sensor = entry_data.get("call_history_sensor")
+    if call_history_sensor:
+        call_history_sensor.start_call(data)
+    
+    # Trigger Fritz!Box dial (F13)
+    fritzbox_dialer = entry_data.get("fritzbox_dialer")
+    if fritzbox_dialer:
+        asyncio.run_coroutine_threadsafe(
+            fritzbox_dialer.dial_and_hangup(ring_duration=30), hass.loop
+        )
+    
+    # Fire HA event (thread-safe)
+    hass.loop.call_soon_threadsafe(
+        hass.bus.async_fire,
         f"{DOMAIN}_doorbell",
         {
             "source": "sip",
@@ -427,6 +538,7 @@ def _sip_doorbell_callback(hass: HomeAssistant, entry: ConfigEntry, data: dict,
             "call_id": data.get("call_id", ""),
             "caller_id": data.get("caller_id", ""),
             "caller_host": data.get("caller_host", ""),
+            "button": data.get("button", "default"),
             "entry_id": entry.entry_id,
         },
     )
@@ -436,23 +548,38 @@ def _sip_doorbell_callback(hass: HomeAssistant, entry: ConfigEntry, data: dict,
 
 
 def _sip_state_callback(hass: HomeAssistant, entry: ConfigEntry, state, data: dict):
-    """Handle SIP call state changes."""
+    """Handle SIP call state changes (called from SIP thread)."""
     _LOGGER.info("SIP call state changed: %s - %s", state.value if hasattr(state, 'value') else state, data)
     
-    # Notify sensors of connection/state change immediately
-    async_dispatcher_send(hass, SIGNAL_SIEDLE_CONNECTION_UPDATE)
+    # Thread-safe: schedule on event loop
+    hass.loop.call_soon_threadsafe(
+        async_dispatcher_send, hass, SIGNAL_SIEDLE_CONNECTION_UPDATE
+    )
+    
+    # Update call history sensor (F4)
+    entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+    call_history_sensor = entry_data.get("call_history_sensor")
+    if call_history_sensor:
+        state_val = state.value if hasattr(state, 'value') else str(state)
+        if state_val == "answered":
+            call_history_sensor.call_answered()
+        elif state_val in ("idle", "ended"):
+            call_history_sensor.call_ended(
+                recording_file=data.get("recording_file"),
+                dtmf_door_opened=data.get("dtmf_door_opened", False),
+            )
     
     # Update recording sensor if recording file is available
     if "recording_file" in data:
         recording_file = data["recording_file"]
-        entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
         recording_sensor = entry_data.get("last_recording_sensor")
         if recording_sensor:
             _LOGGER.info(f"Updating recording sensor with file: {recording_file}")
             recording_sensor.update_recording(recording_file)
     
-    # Fire event for automations
-    hass.bus.fire(
+    # Fire event for automations (thread-safe)
+    hass.loop.call_soon_threadsafe(
+        hass.bus.async_fire,
         f"{DOMAIN}_call_state",
         {
             "state": state.value if hasattr(state, 'value') else str(state),
@@ -463,14 +590,17 @@ def _sip_state_callback(hass: HomeAssistant, entry: ConfigEntry, state, data: di
 
 
 def _fcm_callback(hass: HomeAssistant, entry: ConfigEntry, event_type: str, data: dict):
-    """Handle FCM push notifications."""
+    """Handle FCM push notifications (called from FCM thread)."""
     _LOGGER.info("FCM event: type=%s, data=%s", event_type, data)
     
-    # Notify sensors of FCM connection state change immediately
-    async_dispatcher_send(hass, SIGNAL_SIEDLE_CONNECTION_UPDATE)
+    # Thread-safe: schedule on event loop
+    hass.loop.call_soon_threadsafe(
+        async_dispatcher_send, hass, SIGNAL_SIEDLE_CONNECTION_UPDATE
+    )
     
-    # Fire event for automations
-    hass.bus.fire(
+    # Fire event for automations (thread-safe)
+    hass.loop.call_soon_threadsafe(
+        hass.bus.async_fire,
         f"{DOMAIN}_event",
         {
             "type": "fcm",

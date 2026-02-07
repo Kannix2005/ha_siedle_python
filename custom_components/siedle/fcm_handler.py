@@ -413,6 +413,15 @@ class SiedleFCMHandler:
         self._client.on_data_message = self._on_data_message
         self._client.on_connection_status = self._on_connection_status
         
+        # Also log any raw messages the library receives
+        original_on_raw = getattr(self._client, 'on_raw_message', None)
+        def _on_raw_message(msg, client_id):
+            _LOGGER.info(f"FCM raw message received! Type: {type(msg).__name__}")
+            if original_on_raw:
+                original_on_raw(msg, client_id)
+        if hasattr(self._client, 'on_raw_message'):
+            self._client.on_raw_message = _on_raw_message
+        
         try:
             # Start listening (blocking) - method is start_listening() not start()
             _LOGGER.info("Calling FCM start_listening()...")
@@ -447,17 +456,20 @@ class SiedleFCMHandler:
     
     def _on_notification(self, message: dict, client_id: str):
         """Handle FCM notification message."""
-        _LOGGER.debug(f"FCM notification: {message}")
+        _LOGGER.info(f"FCM notification received! Keys: {list(message.keys()) if isinstance(message, dict) else type(message).__name__}")
+        _LOGGER.debug(f"FCM notification full: {message}")
         self._process_message(message)
     
     def _on_data_message(self, data: bytes, client_id: str):
         """Handle FCM data message."""
-        _LOGGER.debug(f"FCM data message: {data}")
+        _LOGGER.info(f"FCM data message received! Size: {len(data) if data else 0} bytes")
+        _LOGGER.debug(f"FCM data message raw: {data[:200] if data else 'None'}")
         try:
             message = json.loads(data.decode())
+            _LOGGER.info(f"FCM data parsed: keys={list(message.keys())}")
             self._process_message({"payload": {"data": message}})
         except Exception as e:
-            _LOGGER.debug(f"Failed to parse FCM data: {e}")
+            _LOGGER.warning(f"Failed to parse FCM data: {e}")
     
     def _process_message(self, message: dict):
         """Process incoming FCM message and fire events."""

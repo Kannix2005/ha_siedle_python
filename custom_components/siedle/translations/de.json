@@ -31,7 +31,11 @@
           "general": "Allgemeine Einstellungen",
           "external_sip": "Externer SIP Server",
           "call_forwarding": "Anrufweiterleitung",
-          "recording": "Aufzeichnung"
+          "forward_schedule": "Zeitplan Weiterleitung",
+          "dtmf_settings": "DTMF Türöffner",
+          "announcement": "Bitte-Warten-Ansage",
+          "recording": "Aufzeichnung",
+          "fritzbox": "Fritz!Box Integration"
         }
       },
       "general": {
@@ -58,12 +62,40 @@
       },
       "call_forwarding": {
         "title": "Anrufweiterleitung",
-        "description": "Konfigurieren Sie die Anrufweiterleitung zwischen Türstation und externen Telefonen.\n\n**Weiterleitung an**: Nummer die bei Klingeln angerufen wird (z.B. **620 für FritzBox-Telefon)\n**Weiterleitung von**: Nummer die zur Tür anrufen darf",
+        "description": "Konfigurieren Sie die Anrufweiterleitung zwischen Türstation und externen Telefonen.\n\n**Weiterleitung an**: Komma-getrennte Liste von Nummern (z.B. **620,**621,**9). Erste Nummer wird zuerst probiert, dann nächste bei Timeout.\n**Weiterleitung von**: Nummer die zur Tür anrufen darf.\n**Timeout**: Sekunden pro Ziel bis zum nächsten Versuch.",
         "data": {
           "forward_enabled": "Anrufweiterleitung aktivieren",
-          "forward_to_number": "Bei Klingeln diese Nummer anrufen",
+          "forward_to_number": "Bei Klingeln diese Nummern anrufen (kommagetrennt)",
           "forward_from_number": "Anrufe von dieser Nummer zur Tür erlauben",
-          "auto_answer": "Tür-Anrufe automatisch annehmen"
+          "auto_answer": "Tür-Anrufe automatisch annehmen",
+          "forward_timeout": "Klingeldauer pro Ziel (Sekunden)"
+        }
+      },
+      "forward_schedule": {
+        "title": "Zeitplan Weiterleitung",
+        "description": "Anrufe nur zu bestimmten Zeiten und Tagen weiterleiten.\nWenn deaktiviert, werden Anrufe immer weitergeleitet.\n\nZeitformat: HH:MM (24h). Unterstützt Mitternachtsübergang (z.B. 22:00 - 06:00).",
+        "data": {
+          "forward_schedule_enabled": "Zeitgesteuerte Weiterleitung aktivieren",
+          "forward_schedule_start": "Startzeit (HH:MM)",
+          "forward_schedule_end": "Endzeit (HH:MM)",
+          "forward_schedule_days": "Aktive Tage"
+        }
+      },
+      "dtmf_settings": {
+        "title": "DTMF Türöffner",
+        "description": "Erlaubt das Öffnen der Tür oder Schalten des Lichts per Telefon-Tastendruck (DTMF) während eines aktiven Gesprächs.\n\nZum Beispiel: # drücken zum Tür öffnen während Sie mit dem Besucher sprechen.",
+        "data": {
+          "dtmf_enabled": "DTMF-Aktionen aktivieren",
+          "dtmf_door_code": "Tür-Öffnung Code (z.B. # oder 1234#)",
+          "dtmf_light_code": "Licht-Schalten Code (z.B. * oder 56*)"
+        }
+      },
+      "announcement": {
+        "title": "Bitte-Warten-Ansage",
+        "description": "Spielt eine 'Bitte warten'-Ansage für den Besucher an der Türstation ab, während der Anruf weitergeleitet wird.\n\nStellen Sie eine WAV-Datei bereit (8kHz, 16-bit, Mono) im Config-Ordner. Ohne Datei wird ein kurzer Signalton abgespielt.",
+        "data": {
+          "announcement_enabled": "Ansage aktivieren",
+          "announcement_file": "WAV-Datei Pfad (relativ zu config, z.B. siedle/bitte_warten.wav)"
         }
       },
       "recording": {
@@ -72,7 +104,19 @@
         "data": {
           "recording_enabled": "Automatische Aufzeichnung aktivieren",
           "recording_duration": "Aufzeichnungsdauer (Sekunden)",
-          "recording_path": "Aufzeichnungspfad (relativ zu config)"
+          "recording_path": "Aufzeichnungspfad (relativ zu config)",
+          "call_history_size": "Anrufhistorie Größe (Anzahl der Einträge)"
+        }
+      },
+      "fritzbox": {
+        "title": "Fritz!Box Integration",
+        "description": "DECT-Telefone an einer Fritz!Box klingeln lassen wenn die Türklingel betätigt wird.\n\nVerwendet das TR-064 Protokoll. Erfordert einen Fritz!Box-Benutzer mit 'Telefon'-Berechtigung.\n\nSpezielle Nummern: **9 = alle Telefone, **610 = DECT 1, **611 = DECT 2, usw.",
+        "data": {
+          "fritzbox_enabled": "Fritz!Box-Anwahl aktivieren",
+          "fritzbox_host": "Fritz!Box Adresse",
+          "fritzbox_user": "Fritz!Box Benutzername",
+          "fritzbox_password": "Fritz!Box Passwort",
+          "fritzbox_phone_number": "Anzurufende Nummer (z.B. **9)"
         }
       }
     }
