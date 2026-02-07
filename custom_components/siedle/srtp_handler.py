@@ -74,18 +74,26 @@ class SRTPCrypto:
             return None
     
     @staticmethod
-    def generate_sdp_crypto_line() -> str:
+    def generate_sdp_crypto_line() -> Tuple[str, "SRTPCrypto"]:
         """Generate a new SRTP crypto line for SDP answer.
         
         Creates random 16-byte key + 14-byte salt (30 bytes total),
         base64 encodes them, and formats as SDP a=crypto: attribute value.
+        Also returns the SRTPCrypto instance for encrypting outbound packets.
         
         Returns:
-            String like "1 AES_CM_128_HMAC_SHA1_80 inline:<base64key>"
+            Tuple of (sdp_line like "1 AES_CM_128_HMAC_SHA1_80 inline:<base64key>",
+                       SRTPCrypto instance for encryption)
         """
         key_material = os.urandom(30)  # 16 byte key + 14 byte salt
         key_b64 = base64.b64encode(key_material).decode('ascii')
-        return f"1 AES_CM_128_HMAC_SHA1_80 inline:{key_b64}"
+        sdp_line = f"1 AES_CM_128_HMAC_SHA1_80 inline:{key_b64}"
+        
+        master_key = key_material[:16]
+        master_salt = key_material[16:30]
+        crypto = SRTPCrypto(master_key, master_salt)
+        
+        return sdp_line, crypto
     
     def _derive_session_key(self, label: int, index: int = 0) -> bytes:
         """Derive session key from master key using PRF.
@@ -217,4 +225,61 @@ class SRTPCrypto:
             
         except Exception as e:
             _LOGGER.error(f"SRTP decryption error: {e}")
+            return None
+
+    def encrypt_rtp(self, packet: bytes) -> Optional[bytes]:
+        """Encrypt a plain RTP packet to SRTP.
+        
+        Args:
+            packet: Plain RTP packet bytes (header + payload)
+            
+        Returns:
+            SRTP packet bytes (header + encrypted payload + 10-byte auth tag), or None on error
+        """
+        try:
+            if len(packet) < 12:
+                return None
+            
+            # Parse RTP header
+            header = packet[:12]
+            first_byte = header[0]
+            cc = first_byte & 0x0F
+            header_len = 12 + (cc * 4)
+            
+            if len(packet) < header_len:
+                return None
+            
+            # Extract SSRC for key derivation
+            ssrc = struct.unpack("!I", header[8:12])[0]
+            session_key, session_auth_key, session_salt = self.get_session_keys(ssrc)
+            
+            # Extract payload
+            payload = packet[header_len:]
+            
+            # Build IV for encryption (same as decrypt — AES-CTR with SSRC + sequence)
+            sequence = struct.unpack("!H", header[2:4])[0]
+            iv = bytearray(16)
+            iv[0:14] = session_salt
+            iv[4:8] = header[8:12]   # SSRC
+            iv[14:16] = header[2:4]  # Sequence
+            
+            # Encrypt using AES-CTR
+            cipher = Cipher(
+                algorithms.AES(session_key),
+                modes.CTR(bytes(iv)),
+                backend=default_backend()
+            )
+            encryptor = cipher.encryptor()
+            encrypted_payload = encryptor.update(payload)
+            
+            # Build authenticated portion: header + encrypted_payload
+            auth_portion = header + encrypted_payload
+            
+            # Compute HMAC-SHA1-80 authentication tag
+            auth_tag = hmac.new(session_auth_key, auth_portion, hashlib.sha1).digest()[:10]
+            
+            return auth_portion + auth_tag
+            
+        except Exception as e:
+            _LOGGER.error(f"SRTP encryption error: {e}")
             return None

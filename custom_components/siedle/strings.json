@@ -31,7 +31,11 @@
           "general": "General Settings",
           "external_sip": "External SIP Server",
           "call_forwarding": "Call Forwarding",
-          "recording": "Recording"
+          "forward_schedule": "Forwarding Schedule",
+          "dtmf_settings": "DTMF Door Opener",
+          "announcement": "Wait Announcement",
+          "recording": "Recording",
+          "fritzbox": "Fritz!Box Integration"
         }
       },
       "general": {
@@ -57,12 +61,40 @@
       },
       "call_forwarding": {
         "title": "Call Forwarding",
-        "description": "Configure call forwarding between door station and external phones.\n\n**Forward to number**: Number to call when doorbell rings (e.g., **620 for FritzBox phone)\n**Forward from number**: Number that can call the door station",
+        "description": "Configure call forwarding between door station and external phones.\n\n**Forward to number**: Comma-separated list of numbers to try in order (e.g., **620,**621,**9). First number is tried first, then next on timeout.\n**Forward from number**: Number that can call the door station.\n**Timeout**: Seconds to ring each target before trying next.",
         "data": {
           "forward_enabled": "Enable call forwarding",
-          "forward_to_number": "Forward doorbell to this number",
+          "forward_to_number": "Forward doorbell to this number (comma-separated for multiple)",
           "forward_from_number": "Allow calls from this number to door",
-          "auto_answer": "Auto-answer door calls"
+          "auto_answer": "Auto-answer door calls",
+          "forward_timeout": "Ring timeout per target (seconds)"
+        }
+      },
+      "forward_schedule": {
+        "title": "Forwarding Schedule",
+        "description": "Only forward calls during specific times and days.\nIf disabled, calls are always forwarded (when forwarding is enabled).\n\nTime format: HH:MM (24h). Supports midnight crossing (e.g., 22:00 - 06:00).",
+        "data": {
+          "forward_schedule_enabled": "Enable time-based forwarding",
+          "forward_schedule_start": "Start time (HH:MM)",
+          "forward_schedule_end": "End time (HH:MM)",
+          "forward_schedule_days": "Active days"
+        }
+      },
+      "dtmf_settings": {
+        "title": "DTMF Door Opener",
+        "description": "Allow opening the door or toggling the light by pressing phone keys (DTMF) during an active call.\n\nFor example, press # to open the door while talking to a visitor.",
+        "data": {
+          "dtmf_enabled": "Enable DTMF actions",
+          "dtmf_door_code": "Door open code (e.g., # or 1234#)",
+          "dtmf_light_code": "Light toggle code (e.g., * or 56*)"
+        }
+      },
+      "announcement": {
+        "title": "Wait Announcement",
+        "description": "Play a 'please wait' announcement to the door station visitor while the call is being forwarded.\n\nProvide a WAV file (8kHz, 16-bit, mono) in the config folder. If no file is set, a short beep tone will be played.",
+        "data": {
+          "announcement_enabled": "Enable wait announcement",
+          "announcement_file": "WAV file path (relative to config, e.g., siedle/bitte_warten.wav)"
         }
       },
       "recording": {
@@ -71,7 +103,19 @@
         "data": {
           "recording_enabled": "Enable automatic recording",
           "recording_duration": "Recording duration (seconds)",
-          "recording_path": "Recording path (relative to config)"
+          "recording_path": "Recording path (relative to config)",
+          "call_history_size": "Call history size (number of entries)"
+        }
+      },
+      "fritzbox": {
+        "title": "Fritz!Box Integration",
+        "description": "Ring DECT phones connected to a Fritz!Box when the doorbell rings.\n\nUses TR-064 protocol. Requires a Fritz!Box user with 'Phone' permission.\n\nSpecial numbers: **9 = all phones, **610 = DECT 1, **611 = DECT 2, etc.",
+        "data": {
+          "fritzbox_enabled": "Enable Fritz!Box dialing",
+          "fritzbox_host": "Fritz!Box address",
+          "fritzbox_user": "Fritz!Box username",
+          "fritzbox_password": "Fritz!Box password",
+          "fritzbox_phone_number": "Number to dial (e.g., **9)"
         }
       }
     }

@@ -1,6 +1,7 @@
 """RTP Handler for Siedle integration.
 
 Handles RTP audio bridging between two SIP endpoints and recording.
+Includes DTMF detection (RFC 4733) and audio announcement playback.
 """
 import asyncio
 import logging
@@ -11,8 +12,10 @@ import time
 import wave
 import os
 from dataclasses import dataclass
-from typing import Optional, Tuple, Callable
+from typing import Optional, Tuple, Callable, Dict
 from datetime import datetime
+
+from .const import DTMF_EVENT_MAP
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -200,6 +203,349 @@ def pcma_to_linear(pcma_data: bytes) -> bytes:
     return bytes(result)
 
 
+def linear_to_pcma(pcm_data: bytes) -> bytes:
+    """Convert 16-bit linear PCM to A-law (PCMA) audio.
+    
+    Implements ITU-T G.711 A-law compression.
+    Input: 16-bit signed little-endian PCM samples.
+    Output: A-law encoded bytes.
+    """
+    result = bytearray()
+    for i in range(0, len(pcm_data), 2):
+        if i + 1 >= len(pcm_data):
+            break
+        sample = struct.unpack("<h", pcm_data[i:i+2])[0]
+        
+        # A-law compression
+        sign = 0
+        if sample < 0:
+            sign = 0x80
+            sample = -sample
+        if sample > 32767:
+            sample = 32767
+        
+        if sample >= 256:
+            exponent = 7
+            mask = 0x4000
+            while not (sample & mask) and exponent > 1:
+                exponent -= 1
+                mask >>= 1
+            mantissa = (sample >> (exponent + 3)) & 0x0F
+            alaw_byte = sign | (exponent << 4) | mantissa
+        else:
+            alaw_byte = sign | (sample >> 4)
+        
+        # A-law uses XOR with 0x55
+        result.append(alaw_byte ^ 0x55)
+    
+    return bytes(result)
+
+
+class DtmfDetector:
+    """Detects DTMF digits from RFC 4733 telephone-event RTP packets (PT=101).
+    
+    Accumulates digits and fires callback when a complete code is received
+    (terminated by timeout or matching a configured code).
+    """
+    
+    def __init__(
+        self,
+        on_digit: Optional[Callable[[str], None]] = None,
+        on_code: Optional[Callable[[str], None]] = None,
+        code_timeout: float = 3.0,
+    ):
+        """Initialize DTMF detector.
+        
+        Args:
+            on_digit: Callback for each individual digit detected.
+            on_code: Callback when accumulated code is complete (timeout).
+            code_timeout: Seconds of silence before accumulated digits are sent as code.
+        """
+        self._on_digit = on_digit
+        self._on_code = on_code
+        self._code_timeout = code_timeout
+        self._accumulated = ""
+        self._last_digit_time = 0.0
+        self._last_event: Optional[int] = None  # Track last RFC 4733 event to deduplicate
+        self._lock = threading.Lock()
+        self._timer: Optional[threading.Timer] = None
+    
+    def process_rtp(self, packet: 'RtpPacket') -> Optional[str]:
+        """Process an RTP packet for DTMF telephone-event.
+        
+        RFC 4733 telephone-event payload (min 4 bytes):
+          Byte 0: Event code (0-15 maps to 0-9,*,#,A-D)
+          Byte 1: bit 7 = End flag, bits 0-5 = volume
+          Bytes 2-3: Duration (network byte order)
+        
+        Returns the detected digit or None.
+        """
+        if packet.payload_type != 101:
+            return None
+        if len(packet.payload) < 4:
+            return None
+        
+        event_code = packet.payload[0]
+        end_bit = bool(packet.payload[1] & 0x80)
+        
+        # Only process end-of-event to avoid duplicate detections
+        if not end_bit:
+            return None
+        
+        # Deduplicate: RFC 4733 sends end packets multiple times (retransmission)
+        if event_code == self._last_event:
+            return None
+        self._last_event = event_code
+        
+        # Reset dedup after short delay (next digit could be same)
+        def _reset_dedup():
+            self._last_event = None
+        threading.Timer(0.3, _reset_dedup).start()
+        
+        digit = DTMF_EVENT_MAP.get(event_code)
+        if not digit:
+            return None
+        
+        _LOGGER.info(f"DTMF detected: '{digit}' (event={event_code})")
+        
+        with self._lock:
+            self._accumulated += digit
+            self._last_digit_time = time.time()
+            
+            # Cancel previous timeout timer
+            if self._timer:
+                self._timer.cancel()
+            
+            # Start new timeout timer
+            self._timer = threading.Timer(self._code_timeout, self._on_timeout)
+            self._timer.daemon = True
+            self._timer.start()
+        
+        # Notify digit callback
+        if self._on_digit:
+            try:
+                self._on_digit(digit)
+            except Exception as e:
+                _LOGGER.error(f"DTMF digit callback error: {e}")
+        
+        return digit
+    
+    def _on_timeout(self):
+        """Called when no new digits arrive within timeout — emit accumulated code."""
+        with self._lock:
+            code = self._accumulated
+            self._accumulated = ""
+        
+        if code and self._on_code:
+            _LOGGER.info(f"DTMF code complete: '{code}'")
+            try:
+                self._on_code(code)
+            except Exception as e:
+                _LOGGER.error(f"DTMF code callback error: {e}")
+    
+    def check_immediate(self, target_code: str) -> bool:
+        """Check if accumulated digits match target code immediately.
+        
+        Returns True and resets buffer if match found.
+        """
+        with self._lock:
+            if self._accumulated.endswith(target_code):
+                _LOGGER.info(f"DTMF immediate match: '{target_code}' in '{self._accumulated}'")
+                self._accumulated = ""
+                if self._timer:
+                    self._timer.cancel()
+                    self._timer = None
+                return True
+        return False
+    
+    def reset(self):
+        """Reset accumulated digits."""
+        with self._lock:
+            self._accumulated = ""
+            if self._timer:
+                self._timer.cancel()
+                self._timer = None
+            self._last_event = None
+
+
+class AudioPlayer:
+    """Plays WAV audio over RTP as PCMA (G.711a).
+    
+    Used for 'please wait' announcements before forwarding.
+    Sends audio to Siedle door station via RTP.
+    """
+    
+    def __init__(self, sock: socket.socket, remote: Tuple[str, int],
+                 ssrc: Optional[int] = None,
+                 srtp_encrypt: Optional[object] = None):
+        """Initialize audio player.
+        
+        Args:
+            sock: UDP socket to send RTP from.
+            remote: (host, port) to send RTP to.
+            ssrc: SSRC for RTP packets (random if None).
+            srtp_encrypt: Optional SRTP encrypt context for Siedle.
+        """
+        self._sock = sock
+        self._remote = remote
+        self._ssrc = ssrc or int.from_bytes(os.urandom(4), 'big')
+        self._srtp_encrypt = srtp_encrypt
+        self._playing = False
+        self._thread: Optional[threading.Thread] = None
+    
+    def play_file(self, filepath: str, on_complete: Optional[Callable] = None):
+        """Play a WAV file over RTP in background thread.
+        
+        Args:
+            filepath: Path to WAV file (must be 8kHz mono 16-bit PCM).
+            on_complete: Called when playback finishes.
+        """
+        if not os.path.exists(filepath):
+            _LOGGER.warning(f"AudioPlayer: file not found: {filepath}")
+            if on_complete:
+                on_complete()
+            return
+        
+        self._playing = True
+        self._thread = threading.Thread(
+            target=self._play_loop, args=(filepath, on_complete), daemon=True
+        )
+        self._thread.start()
+    
+    def play_tone(self, duration_ms: int = 2000, frequency: int = 440,
+                  on_complete: Optional[Callable] = None):
+        """Play a simple sine tone over RTP.
+        
+        Args:
+            duration_ms: Duration in milliseconds.
+            frequency: Tone frequency in Hz.
+            on_complete: Called when playback finishes.
+        """
+        import math
+        
+        sample_rate = 8000
+        num_samples = int(sample_rate * duration_ms / 1000)
+        pcm_data = bytearray()
+        
+        for i in range(num_samples):
+            # Generate sine wave (amplitude ~8000 to be comfortable volume)
+            sample = int(8000 * math.sin(2 * math.pi * frequency * i / sample_rate))
+            pcm_data.extend(struct.pack("<h", sample))
+        
+        self._playing = True
+        self._thread = threading.Thread(
+            target=self._play_pcm_loop, args=(bytes(pcm_data), on_complete), daemon=True
+        )
+        self._thread.start()
+    
+    def stop(self):
+        """Stop playback."""
+        self._playing = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+        self._thread = None
+    
+    def _play_loop(self, filepath: str, on_complete: Optional[Callable]):
+        """Play WAV file as RTP PCMA packets."""
+        try:
+            with wave.open(filepath, 'rb') as wf:
+                if wf.getsampwidth() != 2 or wf.getnchannels() != 1:
+                    _LOGGER.warning(f"AudioPlayer: WAV must be mono 16-bit, got {wf.getnchannels()}ch {wf.getsampwidth()*8}bit")
+                    if on_complete:
+                        on_complete()
+                    return
+                
+                sample_rate = wf.getframerate()
+                if sample_rate != 8000:
+                    _LOGGER.warning(f"AudioPlayer: WAV should be 8kHz, got {sample_rate}Hz — timing may be off")
+                
+                frames_per_packet = 160  # 20ms at 8kHz
+                pcm_chunk_size = frames_per_packet * 2  # 16-bit = 2 bytes per sample
+                
+                seq = 0
+                ts = 0
+                
+                _LOGGER.info(f"AudioPlayer: playing {filepath}")
+                
+                while self._playing:
+                    pcm_data = wf.readframes(frames_per_packet)
+                    if not pcm_data or len(pcm_data) < pcm_chunk_size:
+                        break
+                    
+                    # Convert to PCMA
+                    pcma_data = linear_to_pcma(pcm_data)
+                    
+                    # Build RTP packet
+                    self._send_rtp_packet(seq, ts, pcma_data)
+                    
+                    seq = (seq + 1) & 0xFFFF
+                    ts = (ts + frames_per_packet) & 0xFFFFFFFF
+                    
+                    time.sleep(0.02)  # 20ms pacing
+                
+                _LOGGER.info(f"AudioPlayer: finished playing {filepath}")
+        except Exception as e:
+            _LOGGER.error(f"AudioPlayer error: {e}")
+        finally:
+            self._playing = False
+            if on_complete:
+                try:
+                    on_complete()
+                except Exception as e:
+                    _LOGGER.error(f"AudioPlayer on_complete error: {e}")
+    
+    def _play_pcm_loop(self, pcm_data: bytes, on_complete: Optional[Callable]):
+        """Play raw PCM data as RTP PCMA packets."""
+        try:
+            frames_per_packet = 160
+            pcm_chunk_size = frames_per_packet * 2
+            offset = 0
+            seq = 0
+            ts = 0
+            
+            while self._playing and offset + pcm_chunk_size <= len(pcm_data):
+                chunk = pcm_data[offset:offset + pcm_chunk_size]
+                pcma_chunk = linear_to_pcma(chunk)
+                
+                self._send_rtp_packet(seq, ts, pcma_chunk)
+                
+                seq = (seq + 1) & 0xFFFF
+                ts = (ts + frames_per_packet) & 0xFFFFFFFF
+                offset += pcm_chunk_size
+                
+                time.sleep(0.02)
+        except Exception as e:
+            _LOGGER.error(f"AudioPlayer tone error: {e}")
+        finally:
+            self._playing = False
+            if on_complete:
+                try:
+                    on_complete()
+                except Exception as e:
+                    _LOGGER.error(f"AudioPlayer on_complete error: {e}")
+    
+    def _send_rtp_packet(self, seq: int, ts: int, payload: bytes):
+        """Send a single RTP packet, optionally SRTP-encrypted."""
+        rtp_header = struct.pack("!BBHII",
+            0x80,  # V=2
+            8,     # PT=8 (PCMA)
+            seq,
+            ts,
+            self._ssrc,
+        )
+        packet = rtp_header + payload
+        
+        if self._srtp_encrypt:
+            encrypted = self._srtp_encrypt.encrypt_rtp(packet)
+            if encrypted:
+                packet = encrypted
+        
+        try:
+            self._sock.sendto(packet, self._remote)
+        except Exception as e:
+            _LOGGER.debug(f"AudioPlayer send error: {e}")
+
+
 class AudioRecorder:
     """Records RTP audio to WAV file."""
     
@@ -271,6 +617,8 @@ class RtpBridge:
     Bridges RTP audio between two endpoints.
     
     Can forward audio bidirectionally and record incoming audio.
+    Supports SRTP decrypt (A→B) and encrypt (B→A) for bridging
+    between encrypted Siedle and plain-RTP external endpoints.
     """
     
     def __init__(self):
@@ -288,6 +636,7 @@ class RtpBridge:
         
         # State
         self._running = False
+        self._bridging = False  # True when bidirectional bridge is active
         self._thread_a_to_b: Optional[threading.Thread] = None
         self._thread_b_to_a: Optional[threading.Thread] = None
         self._thread_keepalive: Optional[threading.Thread] = None
@@ -295,7 +644,10 @@ class RtpBridge:
         # Recording
         self._recorder: Optional[AudioRecorder] = None
         
-        # SRTP Support
+        # SRTP Support — dual context for bridge mode
+        self._srtp_decrypt: Optional[Any] = None  # Decrypt Siedle→us (Siedle's key)
+        self._srtp_encrypt: Optional[Any] = None  # Encrypt us→Siedle (our key)
+        # Legacy alias
         self._srtp_crypto: Optional[Any] = None
         
         # Statistics
@@ -305,6 +657,14 @@ class RtpBridge:
         # Callbacks
         self._on_audio_received: Optional[Callable[[RtpPacket, str], None]] = None
         self._on_recording_stopped: Optional[Callable[[], None]] = None
+        
+        # DTMF Detection (F8)
+        self._dtmf_detector: Optional[DtmfDetector] = None
+        self._on_dtmf_digit: Optional[Callable[[str], None]] = None
+        self._on_dtmf_code: Optional[Callable[[str], None]] = None
+        
+        # Audio Player (F7)
+        self._audio_player: Optional[AudioPlayer] = None
     
     def stun_discover_external_port(self) -> Tuple[Optional[str], Optional[int]]:
         """Discover external IP and port via STUN using the actual RTP socket.
@@ -333,14 +693,69 @@ class RtpBridge:
             return None, None
 
     def set_srtp_crypto(self, crypto):
-        """Set SRTP crypto handler for decryption.
+        """Set SRTP crypto handler for decryption (legacy, sets decrypt context).
         
         Args:
-            crypto: SRTPCrypto instance
+            crypto: SRTPCrypto instance for decrypting Siedle→us
         """
         self._srtp_crypto = crypto
+        self._srtp_decrypt = crypto
         if crypto:
             _LOGGER.info("SRTP decryption enabled for RTP bridge")
+    
+    def set_srtp_decrypt(self, crypto):
+        """Set SRTP decrypt context (Siedle's key — for decrypting A→B).
+        
+        Args:
+            crypto: SRTPCrypto instance created from Siedle's SDP crypto line
+        """
+        self._srtp_decrypt = crypto
+        self._srtp_crypto = crypto  # Legacy compatibility
+        if crypto:
+            _LOGGER.info("SRTP decrypt context set (Siedle→us)")
+    
+    def set_srtp_encrypt(self, crypto):
+        """Set SRTP encrypt context (our key — for encrypting B→A towards Siedle).
+        
+        Args:
+            crypto: SRTPCrypto instance created from our generated SDP crypto line
+        """
+        self._srtp_encrypt = crypto
+        if crypto:
+            _LOGGER.info("SRTP encrypt context set (us→Siedle)")
+    
+    def set_remote_b(self, remote: Tuple[str, int]):
+        """Update remote B endpoint after initial setup.
+        
+        Used when the external SIP phone's RTP address isn't known
+        until its 200 OK response arrives.
+        """
+        self._remote_b = remote
+        _LOGGER.info(f"RTP Bridge: remote B updated to {remote[0]}:{remote[1]}")
+    
+    def stun_discover_external_port_b(self) -> Tuple[Optional[str], Optional[int]]:
+        """Discover external IP and port via STUN using socket_b (external-facing).
+        
+        Used when the external SIP endpoint is outside the LAN.
+        
+        Returns:
+            (external_ip, external_port) or (None, None) on failure
+        """
+        if not self._socket_b:
+            _LOGGER.warning("Cannot run STUN on socket_b - not set up")
+            return None, None
+        
+        try:
+            from .stun_client import discover_external_address
+            ip, port = discover_external_address(local_socket=self._socket_b)
+            if ip and port:
+                _LOGGER.info(f"STUN from socket_b: external {ip}:{port} (local port {self.local_port_b})")
+            else:
+                _LOGGER.warning(f"STUN from socket_b failed (local port {self.local_port_b})")
+            return ip, port
+        except Exception as e:
+            _LOGGER.error(f"STUN discovery error on socket_b: {e}")
+            return None, None
     
     def set_on_audio_received(self, callback: Callable[[RtpPacket, str], None]):
         """Set callback for received audio packets."""
@@ -352,6 +767,73 @@ class RtpBridge:
         This allows the SIP manager to auto-hangup when recording finishes.
         """
         self._on_recording_stopped = callback
+    
+    def set_dtmf_callbacks(
+        self,
+        on_digit: Optional[Callable[[str], None]] = None,
+        on_code: Optional[Callable[[str], None]] = None,
+        code_timeout: float = 3.0,
+    ):
+        """Enable DTMF detection with callbacks (F8).
+        
+        Args:
+            on_digit: Called for each DTMF digit (e.g., '#', '1').
+            on_code: Called when accumulated code is complete after timeout.
+            code_timeout: Seconds of no digits before code is considered complete.
+        """
+        self._on_dtmf_digit = on_digit
+        self._on_dtmf_code = on_code
+        self._dtmf_detector = DtmfDetector(
+            on_digit=on_digit,
+            on_code=on_code,
+            code_timeout=code_timeout,
+        )
+        _LOGGER.info("DTMF detection enabled on RTP bridge")
+    
+    def play_announcement(
+        self,
+        filepath: Optional[str] = None,
+        tone_duration_ms: int = 2000,
+        on_complete: Optional[Callable] = None,
+    ):
+        """Play announcement audio to Siedle door station (F7).
+        
+        If filepath is provided and exists, plays that WAV file.
+        Otherwise plays a short beep tone.
+        
+        Must be called after setup() and with SRTP encrypt set if needed.
+        
+        Args:
+            filepath: Path to WAV file (8kHz mono 16-bit PCM).
+            tone_duration_ms: Duration of fallback beep tone.
+            on_complete: Called when playback finishes.
+        """
+        if not self._socket_a or not self._remote_a:
+            _LOGGER.warning("Cannot play announcement: socket_a or remote_a not set")
+            if on_complete:
+                on_complete()
+            return
+        
+        self._audio_player = AudioPlayer(
+            sock=self._socket_a,
+            remote=self._remote_a,
+            srtp_encrypt=self._srtp_encrypt,
+        )
+        
+        if filepath and os.path.exists(filepath):
+            _LOGGER.info(f"Playing announcement file: {filepath}")
+            self._audio_player.play_file(filepath, on_complete=on_complete)
+        else:
+            _LOGGER.info(f"Playing announcement tone ({tone_duration_ms}ms)")
+            self._audio_player.play_tone(
+                duration_ms=tone_duration_ms, frequency=440, on_complete=on_complete
+            )
+    
+    def stop_announcement(self):
+        """Stop any playing announcement."""
+        if self._audio_player:
+            self._audio_player.stop()
+            self._audio_player = None
     
     def _allocate_port(self) -> Tuple[socket.socket, int]:
         """Allocate a UDP socket on a random available port."""
@@ -372,6 +854,16 @@ class RtpBridge:
         
         Returns (local_port_a, local_port_b) for SDP negotiation.
         """
+        # If bridge is still running from a previous call, stop it first
+        if self._running:
+            _LOGGER.warning("RTP Bridge: setup() called while still running — stopping old bridge first")
+            self.stop()
+        
+        # Reset SRTP contexts from previous call
+        self._srtp_decrypt = None
+        self._srtp_encrypt = None
+        self._srtp_crypto = None
+        
         # Allocate sockets
         self._socket_a, self.local_port_a = self._allocate_port()
         self._socket_b, self.local_port_b = self._allocate_port()
@@ -398,6 +890,7 @@ class RtpBridge:
         self._thread_a_to_b.start()
         
         if self._remote_b:
+            self._bridging = True
             self._thread_b_to_a = threading.Thread(target=self._forward_b_to_a, daemon=True)
             self._thread_b_to_a.start()
         
@@ -408,6 +901,27 @@ class RtpBridge:
             self._thread_keepalive.start()
         
         _LOGGER.info("RTP Bridge started")
+    
+    def start_bridge_b_to_a(self):
+        """Start the B→A forwarding thread (called when external phone picks up).
+        
+        This enables bidirectional bridging: audio from external phone
+        is encrypted with SRTP and forwarded to Siedle.
+        """
+        if not self._running:
+            _LOGGER.warning("Cannot start B→A bridge: RTP bridge not running")
+            return
+        if self._thread_b_to_a and self._thread_b_to_a.is_alive():
+            _LOGGER.debug("B→A bridge thread already running")
+            return
+        if not self._remote_b:
+            _LOGGER.warning("Cannot start B→A bridge: remote_b not set")
+            return
+        
+        self._bridging = True
+        self._thread_b_to_a = threading.Thread(target=self._forward_b_to_a, daemon=True)
+        self._thread_b_to_a.start()
+        _LOGGER.info(f"B→A bridge thread started: forwarding from external to Siedle")
     
     def send_nat_punch(self, remote: Tuple[str, int], count: int = 3):
         """Send NAT punch-through packets to open NAT for incoming RTP.
@@ -577,8 +1091,18 @@ class RtpBridge:
         _LOGGER.info(f"RTP forward A->B thread ended - received {packet_count} packets total, {decryption_errors} decryption errors")
     
     def _forward_b_to_a(self):
-        """Forward packets from B (External) to A (Siedle)."""
-        _LOGGER.debug("RTP forward B->A thread started")
+        """Forward packets from B (External) to A (Siedle).
+        
+        If SRTP encrypt is configured, encrypts plain RTP from external
+        into SRTP before sending to Siedle.
+        """
+        _LOGGER.info(f"RTP forward B->A thread started (port {self.local_port_b})")
+        if self._srtp_encrypt:
+            _LOGGER.info("SRTP encryption enabled for B→A direction")
+        
+        packet_count = 0
+        encryption_errors = 0
+        
         while self._running:
             try:
                 data, addr = self._socket_b.recvfrom(2048)
@@ -586,10 +1110,31 @@ class RtpBridge:
                     packet = RtpPacket.parse(data)
                     if packet:
                         self._packets_b_to_a += 1
+                        packet_count += 1
                         
-                        # Forward to A
+                        if packet_count <= 3:
+                            _LOGGER.info(f"B→A: packet from {addr}, PT={packet.payload_type}, size={len(data)}")
+                        
+                        # DTMF Detection (F8): Check for telephone-event packets
+                        if self._dtmf_detector and packet.payload_type == 101:
+                            self._dtmf_detector.process_rtp(packet)
+                            # Don't forward DTMF event packets to Siedle
+                            continue
+                        
+                        # Forward to A (Siedle)
                         if self._remote_a and self._socket_a:
-                            self._socket_a.sendto(data, self._remote_a)
+                            if self._srtp_encrypt:
+                                # Encrypt plain RTP to SRTP before sending to Siedle
+                                encrypted = self._srtp_encrypt.encrypt_rtp(data)
+                                if encrypted:
+                                    self._socket_a.sendto(encrypted, self._remote_a)
+                                else:
+                                    encryption_errors += 1
+                                    if encryption_errors < 5:
+                                        _LOGGER.warning(f"SRTP encryption failed for B→A packet {packet_count}")
+                            else:
+                                # No encryption — forward raw
+                                self._socket_a.sendto(data, self._remote_a)
                         
                         # Notify callback
                         if self._on_audio_received:
@@ -601,7 +1146,7 @@ class RtpBridge:
                 if self._running:
                     _LOGGER.debug(f"RTP B->A error: {e}")
         
-        _LOGGER.debug("RTP forward B->A thread ended")
+        _LOGGER.info(f"RTP forward B->A thread ended - forwarded {packet_count} packets, {encryption_errors} encryption errors")
     
     def start_recording(self, filepath: str, duration: Optional[int] = None) -> str:
         """
@@ -650,9 +1195,20 @@ class RtpBridge:
         return None
     
     def stop(self):
-        """Stop the RTP bridge."""
+        """Stop the RTP bridge and clean up all resources for reuse."""
         _LOGGER.info("Stopping RTP Bridge...")
         self._running = False
+        self._bridging = False
+        
+        # Stop announcement playback
+        if self._audio_player:
+            self._audio_player.stop()
+            self._audio_player = None
+        
+        # Reset DTMF detector
+        if self._dtmf_detector:
+            self._dtmf_detector.reset()
+            self._dtmf_detector = None
         
         # Stop recording
         if self._recorder:
@@ -673,6 +1229,25 @@ class RtpBridge:
             except:
                 pass
             self._socket_b = None
+        
+        # Reset SRTP contexts (new keys needed per call)
+        self._srtp_decrypt = None
+        self._srtp_encrypt = None
+        self._srtp_crypto = None
+        
+        # Reset remote endpoints
+        self._remote_a = None
+        self._remote_b = None
+        self.local_port_a = 0
+        self.local_port_b = 0
+        
+        # Wait briefly for threads to finish
+        for t in [self._thread_a_to_b, self._thread_b_to_a, self._thread_keepalive]:
+            if t and t.is_alive():
+                t.join(timeout=1.0)
+        self._thread_a_to_b = None
+        self._thread_b_to_a = None
+        self._thread_keepalive = None
         
         _LOGGER.info(f"RTP Bridge stopped. Stats: A->B={self._packets_a_to_b}, B->A={self._packets_b_to_a}")
     
