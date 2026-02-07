@@ -127,3 +127,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Siedle token files (runtime data, not config)
+.siedle_token_*
+siedle/token_*.json

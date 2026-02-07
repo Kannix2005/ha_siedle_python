@@ -75,6 +75,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     endpoint_id = entry.data.get("endpoint_id")
     transfer_secret = entry.data.get("transfer_secret")
 
+    # Ensure Siedle data directory exists (for tokens, cache, etc.)
+    siedle_data_dir = hass.config.path("siedle")
+    os.makedirs(siedle_data_dir, exist_ok=True)
+
+    # Migrate old token files from config root to siedle/ subfolder
+    old_token_path = hass.config.path(f".siedle_token_{entry.entry_id}.json")
+    new_token_path = os.path.join(siedle_data_dir, f"token_{entry.entry_id}.json")
+    if os.path.exists(old_token_path) and not os.path.exists(new_token_path):
+        try:
+            os.rename(old_token_path, new_token_path)
+            _LOGGER.info("Migrated token file to siedle/ subfolder")
+        except OSError as e:
+            _LOGGER.warning("Could not migrate token file: %s", e)
+
     # Initialize Siedle API
     try:
         # Use cached token if available, otherwise authorize
@@ -83,7 +97,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             siedle = await hass.async_add_executor_job(
                 lambda: Siedle(
                     token=token,
-                    token_cache_file=hass.config.path(f".siedle_token_{entry.entry_id}.json"),
+                    token_cache_file=new_token_path,
                 )
             )
             # Restore setupData, endpoint_id, transferSecret, and DECRYPTED sharedSecret
@@ -104,7 +118,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             siedle = await hass.async_add_executor_job(
                 lambda: Siedle(
                     setupInfo=setup_info,
-                    token_cache_file=hass.config.path(f".siedle_token_{entry.entry_id}.json"),
+                    token_cache_file=new_token_path,
                 )
             )
     except Exception as err:
