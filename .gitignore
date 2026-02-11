@@ -137,3 +137,6 @@ siedle/token_*.json
 
 # Test infrastructure (Docker Asterisk)
 test_asterisk/
+
+#Others
+test_*

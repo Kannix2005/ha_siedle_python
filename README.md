@@ -4,193 +4,194 @@
 [![GitHub Release](https://img.shields.io/github/release/Kannix2005/ha_siedle_python.svg)](https://github.com/Kannix2005/ha_siedle_python/releases)
 [![GitHub License](https://img.shields.io/github/license/Kannix2005/ha_siedle_python.svg)](LICENSE)
 
-🇩🇪 Deutsche Version | **[🇬🇧 English Version](README_EN.md)**
+**[🇩🇪 Deutsche Version](README_DE.md)** | 🇬🇧 English Version
 
-Eine vollständige Home Assistant Integration für **Siedle IQ Türstationen (SUS2)** — vollständig reverse-engineered aus der offiziellen Siedle App.
+A complete Home Assistant integration for **Siedle IQ door stations (SUS2)** — fully reverse-engineered from the official Siedle app.
 
 ## Features
 
-- 🚪 **Türöffner** — Öffne die Tür direkt aus Home Assistant
-- 💡 **Türlicht** — Schalte das Licht an der Türstation
-- 🔔 **Klingelerkennung** — Sofortige Erkennung via FCM Push-Benachrichtigungen und SIP INVITE
-- 🎙️ **Audio-Aufnahme** — Automatische Aufzeichnung des Türgesprächs als WAV-Datei (SRTP → PCM)
-- 📱 **SIP-Weiterleitung** — Türklingel an ein externes SIP-Telefon weiterleiten (z.B. FritzBox, Asterisk, MicroSIP)
-- 🔊 **Bidirektionale Audio-Brücke** — Gegensprechen mit der Tür über externes SIP-Telefon (SRTP ↔ RTP)
-- ⏱️ **Anruf-Timeout & Fallback** — Automatischer Timeout pro Weiterleitungsziel, dann nächstes Ziel (F1)
-- 📞 **Mehrere Weiterleitungsziele** — Kommaseparierte Nummern, wird sequentiell durchprobiert (F2)
-- 📊 **Anruf-Historie** — Sensor mit den letzten X Anrufen inkl. Zeitstempel, Anrufer, Dauer (F4)
-- 🕐 **Zeitgesteuerte Weiterleitung** — Weiterleitung nur zu bestimmten Uhrzeiten/Wochentagen (F6)
-- 🔈 **Bitte-Warten-Ansage** — WAV-Datei oder Signalton abspielen während Verbindungsaufbau (F7)
-- 🔢 **DTMF Türöffner** — Tür per Telefon-Tastendruck (z.B. #) während Gespräch öffnen (F8)
-- 🎵 **Media Source** — Aufnahmen direkt in HA Media Browser abspielen (F9)
-- 🔍 **Diagnostics** — Vollständiger Systemstatus für Fehlersuche (F10)
-- 🔘 **Mehrere Klingeltaster** — Unterscheidung verschiedener Türstations-Klingelknöpfe (F12)
-- 📡 **Fritz!Box Click-to-Dial** — DECT-Telefone über FR!TZBox klingeln lassen per TR-064 (F13)
-- 📷 **Kamera-Entity** — Stub für zukünftige Türkamera-Integration (F14)
-- ❌ **Auflegen-Button** — Beende aktive Anrufe direkt aus Home Assistant
-- 📊 **Status-Sensoren** — SIP, MQTT, FCM Verbindungsstatus, Anrufstatus, Türkontakte
-- 🔒 **Sichere Kommunikation** — SIP über TLS, Audio über SRTP (AES-CM-128-HMAC-SHA1-80)
+- 🚪 **Door Opener** — Open the door directly from Home Assistant
+- 💡 **Door Light** — Control the light at the door station
+- 🔔 **Doorbell Detection** — Instant detection via FCM push notifications and SIP INVITE
+- 🎙️ **Audio Recording** — Automatic recording of door conversations as WAV file (SRTP → PCM)
+- 📱 **SIP Forwarding** — Forward doorbell to external SIP phone (e.g., FritzBox, Asterisk, MicroSIP)
+- 🔊 **Bidirectional Audio Bridge** — Two-way communication with the door via external SIP phone (SRTP ↔ RTP)
+- ⏱️ **Call Timeout & Fallback** — Automatic timeout per forwarding target, then next target (F1)
+- 📞 **Multiple Forwarding Targets** — Comma-separated numbers, tried sequentially (F2)
+- 📊 **Call History** — Sensor with last X calls including timestamp, caller, duration (F4)
+- 🕐 **Time-based Forwarding** — Forwarding only during specific hours/weekdays (F6)
+- 🔈 **Please-Wait Announcement** — Play WAV file or tone during connection setup (F7)
+- 🔢 **DTMF Door Opener** — Open door via phone keypress (e.g., #) during call (F8)
+- 🎵 **Media Source** — Play recordings directly in HA Media Browser (F9)
+- 🔍 **Diagnostics** — Complete system status for troubleshooting (F10)
+- 🔘 **Multiple Doorbell Buttons** — Distinguish between different door station bell buttons (F12)
+- 📡 **Fritz!Box Click-to-Dial** — Ring DECT phones via FritzBox using TR-064 (F13)
+- 📷 **Camera Entity** — Stub for future door camera integration (F14)
+- ❌ **Hangup Button** — End active calls directly from Home Assistant
+- 📊 **Status Sensors** — SIP, MQTT, FCM connection status, call status, door contacts
+- 🔒 **Secure Communication** — SIP over TLS, audio via SRTP (AES-CM-128-HMAC-SHA1-80)
 
 ---
 
-## Voraussetzungen
+## Prerequisites
 
-- Ein **Siedle IQ System (SUS2)** mit eingerichteter Siedle App
-- Home Assistant (empfohlen: aktuelle Version)
-- **Netzwerk-Voraussetzungen für Audio-Aufnahme:**
-  - Dein Home Assistant muss über das Internet erreichbar sein (Port-Forwarding für den RTP-Port, Standard ~45000-65000)
-  - Oder: Dein Router muss 1:1 NAT / Full-Cone NAT unterstützen (OPNSense, pfSense)
-  - Die Integration nutzt STUN um den externen Port automatisch zu erkennen
+- A **Siedle IQ System (SUS2)** with Siedle app set up
+- Home Assistant (recommended: current version)
+- **Network requirements for audio recording:**
+  - Your Home Assistant must be reachable from the internet (port forwarding for RTP port, typically ~45000-65000)
+  - Or: Your router must support 1:1 NAT / Full-Cone NAT (OPNSense, pfSense)
+  - The integration uses STUN to automatically detect the external port
 
 ---
 
 ## Installation
 
-### HACS (empfohlen)
+### HACS (recommended)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Kannix2005&repository=ha_siedle_python&category=integration)
 
-Oder manuell in HACS:
-1. HACS öffnen → "Custom repositories" hinzufügen
-2. URL: `https://github.com/Kannix2005/ha_siedle_python`, Kategorie: Integration
-3. "Siedle" suchen und installieren
-4. Home Assistant neu starten
+Or manually in HACS:
+1. Open HACS → Add "Custom repository"
+2. URL: `https://github.com/Kannix2005/ha_siedle_python`, Category: Integration
+3. Search for "Siedle" and install
+4. Restart Home Assistant
 
-### Manuell
+### Manual
 
-1. Den `custom_components/siedle` Ordner nach `config/custom_components/siedle` kopieren
-2. Home Assistant neu starten
+1. Copy the `custom_components/siedle` folder to `config/custom_components/siedle`
+2. Restart Home Assistant
 
 ---
 
-## Einrichtung (Setup)
+## Setup
 
-### Schritt 1: QR-Code aus der Siedle App scannen
+### Step 1: Scan QR Code from Siedle App
 
-> ⚠️ **Wichtig:** Du brauchst vermutlich ein **zweites Gerät** (z.B. ein Tablet oder das Handy eines Freundes), um den QR-Code von deinem Handy-Bildschirm abzuscannen. Der QR-Code wird in der Siedle App angezeigt und muss vom HA-Setup-Dialog erfasst werden.
+> ⚠️ **Important:** You will likely need a **second device** (e.g., a tablet or a friend's phone) to scan the QR code from your phone screen. The QR code is displayed in the Siedle app and must be captured by the HA setup dialog.
 
-1. Öffne die **Siedle App** auf deinem Smartphone
-2. Gehe zu **Einstellungen** → **Neues Gerät hinzufügen**
-3. Ein QR-Code wird angezeigt — diesen brauchst du im nächsten Schritt
+1. Open the **Siedle app** on your smartphone
+2. Go to **Settings** → **Add New Device**
+3. A QR code is displayed — you'll need this in the next step
 
-### Schritt 2: Integration in Home Assistant einrichten
+### Step 2: Set up Integration in Home Assistant
 
-1. Gehe in HA zu **Einstellungen → Geräte & Dienste → Integration hinzufügen**
-2. Suche nach **"Siedle"**
-3. Du wirst zu einer QR-Scanner-Seite weitergeleitet
-4. Scanne den QR-Code von der Siedle App (mit dem zweiten Gerät oder der Webcam)
-5. Die Daten werden automatisch an HA übermittelt
+1. In HA, go to **Settings → Devices & Services → Add Integration**
+2. Search for **"Siedle"**
+3. You'll be redirected to a QR scanner page
+4. Scan the QR code from the Siedle app (with the second device or webcam)
+5. The data will be automatically transmitted to HA
 
-### Schritt 3: Endpoint aktivieren
+### Step 3: Activate Endpoint
 
-1. Nachdem die QR-Daten übertragen wurden, fordert HA dich auf: **"Drücke jetzt die Türklingel"**
-2. Drücke die physische Klingel an der Türstation
-3. Die Integration erkennt den Push und aktiviert den Endpoint beim Siedle-Server
+1. After the QR data is transferred, HA will prompt you: **"Now press the doorbell"**
+2. Press the physical doorbell at the door station
+3. The integration detects the push and activates the endpoint on the Siedle server
 
-### Schritt 4: Optionen konfigurieren
+### Step 4: Configure Options
 
-Nach erfolgreicher Einrichtung kannst du in den Integrations-Optionen folgendes aktivieren:
-- **Automatische Aufnahme**: Zeichnet das Türgespräch als WAV auf
-- **FCM Push**: Klingelerkennung (standardmäßig aktiv)
-- **Externer SIP-Server**: Anrufweiterleitung an FritzBox, Asterisk & Co.
-- **Anrufweiterleitung**: Türklingel an externes SIP-Telefon mit bidirektionalem Audio
+After successful setup, you can configure the following in the integration options:
+- **Automatic Recording**: Records door conversations as WAV
+- **FCM Push**: Doorbell detection (enabled by default)
+- **External SIP Server**: Call forwarding to FritzBox, Asterisk & Co.
+- **Call Forwarding**: Forward doorbell to external SIP phone with bidirectional audio
 
+---
 
-## Entitäten
+## Entities
 
 ### Binary Sensors
-| Entity | Beschreibung |
-|--------|--------------|
-| `binary_sensor.siedle_turklingel` | Wird kurzzeitig "on" wenn geklingelt wird (5 Sek.) |
-| `binary_sensor.siedle_mqtt_verbindung` | MQTT-Verbindungsstatus zum Siedle-Server |
-| `binary_sensor.siedle_fcm_push_verbindung` | FCM Push-Verbindungsstatus |
-| `binary_sensor.siedle_turkontakt_*` | Verfügbarkeit einzelner Türkontakte |
+| Entity | Description |
+|--------|-------------|
+| `binary_sensor.siedle_doorbell` | Briefly turns "on" when doorbell is pressed (5 sec.) |
+| `binary_sensor.siedle_mqtt_connection` | MQTT connection status to Siedle server |
+| `binary_sensor.siedle_fcm_push_connection` | FCM push connection status |
+| `binary_sensor.siedle_door_contact_*` | Availability of individual door contacts |
 
-### Sensoren
-| Entity | Beschreibung |
-|--------|--------------|
-| `sensor.siedle_anrufstatus` | Aktueller Status: Bereit / Klingelt / Verbunden / Aufnahme |
-| `sensor.siedle_sip_status` | SIP-Registrierungsstatus (Siedle + ggf. extern) |
-| `sensor.siedle_mqtt_status` | MQTT-Verbindungsstatus als Text |
-| `sensor.siedle_letzte_aufnahme` | Zeitstempel und Pfad der letzten Aufnahme |
+### Sensors
+| Entity | Description |
+|--------|-------------|
+| `sensor.siedle_call_status` | Current status: Ready / Ringing / Connected / Recording |
+| `sensor.siedle_sip_status` | SIP registration status (Siedle + external if configured) |
+| `sensor.siedle_mqtt_status` | MQTT connection status as text |
+| `sensor.siedle_last_recording` | Timestamp and path of last recording |
 
 ### Buttons
-| Entity | Beschreibung |
-|--------|--------------|
-| `button.siedle_turoeffner` | Tür öffnen |
-| `button.siedle_turlicht` | Türlicht einschalten |
-| `button.siedle_auflegen` | Aktiven Anruf beenden |
+| Entity | Description |
+|--------|-------------|
+| `button.siedle_door_opener` | Open door |
+| `button.siedle_door_light` | Turn on door light |
+| `button.siedle_hangup` | End active call |
 
 ---
 
-## Konfigurationsoptionen
+## Configuration Options
 
-Über **Einstellungen → Geräte & Dienste → Siedle → Konfigurieren**:
+Via **Settings → Devices & Services → Siedle → Configure**:
 
-### Aufnahme
+### Recording
 
-| Option | Standard | Beschreibung |
-|--------|----------|--------------|
-| Aktiviert | Aus | Automatische Aufnahme bei Türklingel |
-| Max. Dauer | 30 Sek. | Maximale Aufnahmedauer |
-| Speicherpfad | `www/siedle_recordings` | Verzeichnis für WAV-Dateien |
+| Option | Default | Description |
+|--------|---------|-------------|
+| Enabled | Off | Automatic recording on doorbell |
+| Max. Duration | 30 sec. | Maximum recording duration |
+| Storage Path | `www/siedle_recordings` | Directory for WAV files |
 
-> ⚠️ **Hinweis:** Die Aufnahme von Gesprächen an der Tür kann rechtlich problematisch sein. Bitte stelle sicher, dass du die lokalen Datenschutzgesetze einhältst (z.B. DSGVO, Bundesdatenschutzgesetz).
+> ⚠️ **Note:** Recording conversations at the door may be legally problematic. Please ensure you comply with local privacy laws (e.g., GDPR, data protection laws).
 
-Bei aktivierter Aufnahme wird der Anruf automatisch angenommen (Auto-Answer), die Audio-Daten werden per SRTP empfangen, entschlüsselt und als WAV-Datei gespeichert. Nach Ablauf der Aufnahmedauer wird der Anruf automatisch beendet (Auto-Hangup).
+When recording is enabled, the call is automatically answered (Auto-Answer), audio data is received via SRTP, decrypted, and saved as a WAV file. After the recording duration expires, the call is automatically ended (Auto-Hangup).
 
-### FCM Push-Benachrichtigungen
+### FCM Push Notifications
 
-| Option | Standard | Beschreibung |
-|--------|----------|--------------|
-| Aktiviert | An | FCM-basierte Klingelerkennung |
-| Gerätename | HA Standortname | Name der in der Siedle App angezeigt wird |
+| Option | Default | Description |
+|--------|---------|-------------|
+| Enabled | On | FCM-based doorbell detection |
+| Device Name | HA Location Name | Name displayed in Siedle app |
 
-FCM ist die **primäre und zuverlässigste Methode** zur Klingelerkennung. Die Integration emuliert ein Android-Gerät und empfängt Firebase Cloud Messages direkt.
+FCM is the **primary and most reliable method** for doorbell detection. The integration emulates an Android device and receives Firebase Cloud Messages directly.
 
-> ⚠️ **Hinweis zu Push-Limits:** Die Siedle-Server senden bei mehrmaligem Klingeln innerhalb von **10 Minuten nur eine einzige Push-Nachricht**. Dies ist eine Limitierung des Siedle-Systems, nicht der Integration. Die Integration erkennt alle Klingelvorgänge über SIP INVITE — nur die FCM-Push-Benachrichtigung wird gedrosselt.
+> ⚠️ **Note on Push Limits:** The Siedle servers send only **one single push notification** when the doorbell is pressed multiple times within **10 minutes**. This is a limitation of the Siedle system, not the integration. The integration detects all doorbell events via SIP INVITE — only the FCM push notification is throttled.
 
-### Externer SIP-Server
+### External SIP Server
 
-| Option | Standard | Beschreibung |
-|--------|----------|--------------|
-| Aktiviert | Aus | Externen SIP-Server für Anrufweiterleitung aktivieren |
-| Host | — | IP oder Hostname (z.B. `192.168.178.1` für FritzBox) |
-| Port | 5060 | SIP-Port |
-| Benutzername | — | SIP-Benutzername für REGISTER |
-| Passwort | — | SIP-Passwort |
-| Transport | UDP | UDP, TCP oder TLS |
+| Option | Default | Description |
+|--------|---------|-------------|
+| Enabled | Off | Enable external SIP server for call forwarding |
+| Host | — | IP or hostname (e.g., `192.168.178.1` for FritzBox) |
+| Port | 5060 | SIP port |
+| Username | — | SIP username for REGISTER |
+| Password | — | SIP password |
+| Transport | UDP | UDP, TCP, or TLS |
 
-### Anrufweiterleitung
+### Call Forwarding
 
-| Option | Standard | Beschreibung |
-|--------|----------|--------------|
-| Aktiviert | Aus | Weiterleitung bei Klingeln |
-| Zielrufnummer | — | z.B. `**9` (FritzBox Rundruf) |
-| Absendernummer | — | CallerID für das externe Telefon |
-| Auto-Answer | Aus | Türstation automatisch annehmen |
+| Option | Default | Description |
+|--------|---------|-------------|
+| Enabled | Off | Forwarding on doorbell |
+| Target Number | — | e.g., `**9` (FritzBox broadcast) |
+| Caller ID | — | CallerID for external phone |
+| Auto-Answer | Off | Automatically answer door station |
 
 ---
 
 ## Events
 
-Die Integration feuert folgende HA-Events, die in Automationen verwendet werden können:
+The integration fires the following HA events that can be used in automations:
 
 ```yaml
-# Bei jedem Siedle-Event (FCM, MQTT, SIP)
+# On every Siedle event (FCM, MQTT, SIP)
 event_type: siedle_event
 data:
   type: "fcm" | "mqtt" | "sip"
   event_type: "doorbell"
   entry_id: "..."
 
-# Speziell bei Türklingel
+# Specifically on doorbell
 event_type: siedle_doorbell
 data:
   source: "sip" | "fcm"
   entry_id: "..."
 
-# Bei Anrufstatus-Änderungen
+# On call state changes
 event_type: siedle_call_state
 data:
   state: "idle" | "ringing" | "connected" | "recording"
@@ -198,19 +199,19 @@ data:
   entry_id: "..."
 ```
 
-### Automation-Beispiel
+### Automation Example
 
 ```yaml
 automation:
-  - alias: "Klingel-Benachrichtigung"
+  - alias: "Doorbell Notification"
     trigger:
       - platform: state
-        entity_id: binary_sensor.siedle_turklingel
+        entity_id: binary_sensor.siedle_doorbell
         to: "on"
     action:
       - action: notify.mobile_app
         data:
-          message: "Jemand klingelt an der Tür!"
+          message: "Someone is at the door!"
           data:
             push:
               sound: "default"
@@ -221,27 +222,27 @@ automation:
 
 ## Services
 
-| Service | Beschreibung |
-|---------|--------------|
-| `siedle.open_door` | Öffnet die Tür (optional: `contact_id`) |
-| `siedle.toggle_light` | Schaltet das Türlicht (optional: `contact_id`) |
-| `siedle.hangup_call` | Beendet den aktiven Anruf |
-| `siedle.activate_endpoint` | Endpoint aktivieren — Klingel drücken! |
+| Service | Description |
+|---------|-------------|
+| `siedle.open_door` | Opens the door (optional: `contact_id`) |
+| `siedle.toggle_light` | Toggles door light (optional: `contact_id`) |
+| `siedle.hangup_call` | Ends active call |
+| `siedle.activate_endpoint` | Activate endpoint — press doorbell! |
 
 ---
 
-## Technische Architektur
+## Technical Architecture
 
-Diese Integration kommuniziert mit dem Siedle SUS2 Cloud-System über mehrere Protokolle:
+This integration communicates with the Siedle SUS2 cloud system via multiple protocols:
 
-### Kommunikationskanäle
+### Communication Channels
 
 ```
 ┌─────────────┐        REST API (HTTPS)        ┌──────────────────┐
 │             │◄──────────────────────────────►│                  │
 │  Home       │      SIP/TLS (:5061)           │  Siedle Cloud    │
 │  Assistant  │◄──────────────────────────────►│  (sus2.siedle.   │
-│             │      SRTP (UDP, dynamisch)      │   com)           │
+│             │      SRTP (UDP, dynamic)       │   com)           │
 │             │◄──────────────────────────────►│                  │
 │             │      MQTT (SSL)                │                  │
 │             │◄──────────────────────────────►│                  │
@@ -250,48 +251,48 @@ Diese Integration kommuniziert mit dem Siedle SUS2 Cloud-System über mehrere Pr
 └─────────────┘                                └──────────────────┘
 ```
 
-| Protokoll | Zweck | Details |
-|-----------|-------|---------|
-| **REST API** | Authentifizierung, Kontakte, Türöffner, Licht | OAuth2 via `sus2.siedle.com` |
-| **SIP/TLS** | Anrufsignalisierung | Port 5061, Client-Zertifikat nicht erforderlich |
-| **SRTP** | Audio-Übertragung (verschlüsselt) | AES_CM_128_HMAC_SHA1_80, PCMA/8000, RFC 4568 (SDES) |
-| **MQTT** | Gerätestatus, Events | TLS, Benachrichtigungen über Statusänderungen |
-| **FCM** | Push-Klingelerkennung | Firebase Cloud Messaging, emuliertes Android-Gerät |
+| Protocol | Purpose | Details |
+|----------|---------|---------|
+| **REST API** | Authentication, contacts, door opener, light | OAuth2 via `sus2.siedle.com` |
+| **SIP/TLS** | Call signaling | Port 5061, client certificate not required |
+| **SRTP** | Audio transmission (encrypted) | AES_CM_128_HMAC_SHA1_80, PCMA/8000, RFC 4568 (SDES) |
+| **MQTT** | Device status, events | TLS, notifications about status changes |
+| **FCM** | Push doorbell detection | Firebase Cloud Messaging, emulated Android device |
 
-### SIP & Audio im Detail
+### SIP & Audio in Detail
 
-Die SIP-Verbindung ist das Herzstück der Anruf- und Aufnahmefunktion:
+The SIP connection is the heart of the call and recording functionality:
 
-1. **Registrierung:** Die Integration registriert sich per SIP REGISTER bei `sus2-sip.siedle.com:5061` (TLS)
-2. **Eingehender Anruf:** Bei einem Klingeln sendet Siedle einen SIP INVITE
-3. **Annahme:** Die Integration antwortet mit `100 Trying`, dann `200 OK` mit SDP
-4. **Audio:** SRTP-verschlüsselte Audio-Daten (PCMA/G.711a, 8kHz) werden empfangen
-5. **Aufnahme:** Die SRTP-Pakete werden entschlüsselt und als WAV-Datei gespeichert
-6. **Beenden:** Nach Ablauf der Aufnahmedauer wird automatisch ein SIP BYE gesendet
+1. **Registration:** The integration registers via SIP REGISTER to `sus2-sip.siedle.com:5061` (TLS)
+2. **Incoming Call:** On doorbell, Siedle sends a SIP INVITE
+3. **Answer:** The integration responds with `100 Trying`, then `200 OK` with SDP
+4. **Audio:** SRTP-encrypted audio data (PCMA/G.711a, 8kHz) is received
+5. **Recording:** SRTP packets are decrypted and saved as WAV file
+6. **End:** After recording duration expires, a SIP BYE is automatically sent
 
-#### NAT-Traversal
+#### NAT Traversal
 
-Da Home Assistant typischerweise hinter einem NAT-Router steht, implementiert die Integration:
+Since Home Assistant typically runs behind a NAT router, the integration implements:
 
-- **STUN** (RFC 5389): Ermittelt die öffentliche IP und den externen Port vom tatsächlichen RTP-Socket
-- **Via `received=` Parsing**: Erkennt die von Siedle gesehene öffentliche IP aus dem SIP-Header
-- **NAT Punch-Through**: Sendet leere PCMA-Pakete um die NAT-Zuordnung zu öffnen
-- **RTP Keepalive**: Kontinuierliche Stille-Pakete (alle 20ms) halten die NAT-Zuordnung offen
-- **Multi-Via Header**: Alle Via-Header werden korrekt in SIP-Antworten kopiert (RFC 3261)
-- **Record-Route**: Alle Record-Route-Header werden aus dem INVITE übernommen
+- **STUN** (RFC 5389): Determines public IP and external port from actual RTP socket
+- **Via `received=` Parsing**: Detects public IP seen by Siedle from SIP header
+- **NAT Punch-Through**: Sends empty PCMA packets to open NAT mapping
+- **RTP Keepalive**: Continuous silence packets (every 20ms) keep NAT mapping open
+- **Multi-Via Header**: All Via headers are correctly copied in SIP responses (RFC 3261)
+- **Record-Route**: All Record-Route headers from INVITE are adopted
 
-#### SRTP-Verschlüsselung
+#### SRTP Encryption
 
-- **Algorithmus:** AES_CM_128_HMAC_SHA1_80 (RFC 3711)
-- **Schlüsselaustausch:** SDES via SDP (RFC 4568) — jede Seite generiert ihren eigenen Master Key
-- **Key Derivation:** SRTP Key Derivation Function mit label-basierten Session Keys
-- **Authentifizierung:** HMAC-SHA1, 80-bit Tag an jedem Paket
+- **Algorithm:** AES_CM_128_HMAC_SHA1_80 (RFC 3711)
+- **Key Exchange:** SDES via SDP (RFC 4568) — each side generates its own master key
+- **Key Derivation:** SRTP Key Derivation Function with label-based session keys
+- **Authentication:** HMAC-SHA1, 80-bit tag on each packet
 
 ---
 
 ## Debugging
 
-### Logs aktivieren
+### Enable Logs
 
 ```yaml
 logger:
@@ -304,48 +305,48 @@ logger:
     custom_components.siedle.fcm_handler: debug
 ```
 
-### Häufige Probleme
+### Common Issues
 
-| Problem | Lösung |
-|---------|--------|
-| Kein Audio in Aufnahme | NAT-Konfiguration prüfen — Router muss UDP-Pakete durchlassen. Logs auf STUN-Ergebnisse prüfen. |
-| FCM verbindet nicht | FCM braucht ~10-30 Sek. zum Starten. Token-Refresh passiert automatisch. |
-| SIP registriert nicht | TLS-Verbindung zu `sus2-sip.siedle.com:5061` prüfen. Firewall-Regeln checken. |
-| Türöffner funktioniert nicht | `sharedSecret` muss korrekt entschlüsselt sein — im Log nach "Restored decrypted sharedSecret" suchen. |
-| Aufnahme bricht sofort ab | Prüfe ob der RTP-Port extern erreichbar ist. STUN-Log zeigt den erwarteten Port. |
+| Problem | Solution |
+|---------|----------|
+| No audio in recording | Check NAT configuration — router must allow UDP packets. Check logs for STUN results. |
+| FCM not connecting | FCM needs ~10-30 sec. to start. Token refresh happens automatically. |
+| SIP not registering | Check TLS connection to `sus2-sip.siedle.com:5061`. Check firewall rules. |
+| Door opener not working | `sharedSecret` must be correctly decrypted — look for "Restored decrypted sharedSecret" in log. |
+| Recording stops immediately | Check if RTP port is externally accessible. STUN log shows expected port. |
 
-### Nützliche Log-Meldungen
+### Useful Log Messages
 
 ```
-# Erfolgreiche SIP-Registrierung:
+# Successful SIP registration:
 "Siedle SIP registered successfully"
 
-# SRTP Schlüssel generiert:
+# SRTP keys generated:
 "Generated local SRTP crypto line"
 
-# Audio-Pakete empfangen:
+# Audio packets received:
 "Received N audio bytes from Siedle, decrypted M samples"
 
-# NAT-Erkennung:
+# NAT detection:
 "STUN discovered external address: x.x.x.x:yyyyy"
 "Public IP from SIP Via received=: x.x.x.x"
 ```
 
 ---
 
-## Bekannte Einschränkungen
+## Known Limitations
 
-- **Keine Video-Unterstützung:** Siedle SUS2 überträgt kein Video über SIP — das Kamerabild wird nur in der offiziellen App angezeigt.
-- **Nur ein aktiver Anruf:** Die Integration unterstützt nur einen gleichzeitigen Anruf.
-- **Cloud-Abhängigkeit:** Alle Kommunikation läuft über Siedle Cloud-Server — kein lokaler Fallback möglich.
+- **No video support:** Siedle SUS2 does not transmit video via SIP — the camera image is only shown in the official app.
+- **Only one active call:** The integration supports only one simultaneous call.
+- **Cloud dependency:** All communication goes through Siedle cloud servers — no local fallback possible.
 
 ---
 
 ## Support
 
-- 🐛 **Bug melden**: [GitHub Issues](https://github.com/Kannix2005/ha_siedle_python/issues)
-- 💡 **Feature anfragen**: [GitHub Issues](https://github.com/Kannix2005/ha_siedle_python/issues)
+- 🐛 **Report bug**: [GitHub Issues](https://github.com/Kannix2005/ha_siedle_python/issues)
+- 💡 **Request feature**: [GitHub Issues](https://github.com/Kannix2005/ha_siedle_python/issues)
 
-## Lizenz
+## License
 
-GPL-3.0 License — siehe [LICENSE](LICENSE)
+GPL-3.0 License — see [LICENSE](LICENSE)
