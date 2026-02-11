@@ -5,175 +5,118 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Siedle QR-Code Scanner</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        :root {
+            --ha-primary: #03a9f4;
+            --ha-bg: #f7f7f7;
+            --ha-card-bg: #ffffff;
+            --ha-text: #202020;
+            --ha-muted: #6b6b6b;
+            --ha-success: #4caf50;
+            --ha-error: #f44336;
+            --ha-warning: #ff9800;
+            --ha-border: #e0e0e0;
         }
-        
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --ha-bg: #121212;
+                --ha-card-bg: #1e1e1e;
+                --ha-text: #e0e0e0;
+                --ha-muted: #9e9e9e;
+                --ha-border: #2a2a2a;
+            }
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: var(--ha-bg);
+            color: var(--ha-text);
             min-height: 100vh;
             display: flex;
-            flex-direction: column;
             align-items: center;
             justify-content: center;
-            padding: 20px;
+            padding: 24px;
         }
-        
-        .container {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            max-width: 500px;
+        .card {
+            background: var(--ha-card-bg);
+            border-radius: 12px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+            border: 1px solid var(--ha-border);
+            max-width: 560px;
             width: 100%;
-            overflow: hidden;
         }
-        
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
-            text-align: center;
+        .card-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--ha-border);
         }
-        
-        .header h1 {
-            font-size: 24px;
-            margin-bottom: 10px;
-        }
-        
-        .header p {
-            font-size: 14px;
-            opacity: 0.9;
-        }
-        
-        .content {
-            padding: 30px;
-        }
-        
+        .title { font-size: 20px; font-weight: 600; }
+        .subtitle { font-size: 13px; color: var(--ha-muted); margin-top: 4px; }
+        .card-content { padding: 16px; }
         #qr-reader {
             width: 100%;
-            border-radius: 10px;
+            border-radius: 8px;
             overflow: hidden;
-            background: #f0f0f0;
+            background: rgba(0,0,0,0.06);
             position: relative;
         }
-        
-        #qr-reader video {
-            width: 100%;
-            height: auto;
-            display: block;
-        }
-        
+        #qr-reader video { width: 100%; height: auto; display: block; }
         .status {
-            margin-top: 20px;
-            padding: 15px;
-            border-radius: 10px;
-            text-align: center;
+            margin-top: 12px;
+            padding: 12px;
+            border-radius: 8px;
             font-size: 14px;
+            border: 1px solid var(--ha-border);
         }
-        
-        .status.info {
-            background: #e3f2fd;
-            color: #1976d2;
-        }
-        
-        .status.success {
-            background: #e8f5e9;
-            color: #388e3c;
-        }
-        
-        .status.error {
-            background: #ffebee;
-            color: #d32f2f;
-        }
-        
-        .status.warning {
-            background: #fff3e0;
-            color: #f57c00;
-        }
-        
+        .status.info { background: rgba(3,169,244,0.08); color: var(--ha-text); }
+        .status.success { background: rgba(76,175,80,0.08); color: var(--ha-text); }
+        .status.error { background: rgba(244,67,54,0.08); color: var(--ha-text); }
+        .status.warning { background: rgba(255,152,0,0.10); color: var(--ha-text); }
         .spinner {
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #667eea;
+            border: 3px solid rgba(0,0,0,0.08);
+            border-top: 3px solid var(--ha-primary);
             border-radius: 50%;
-            width: 40px;
-            height: 40px;
+            width: 32px; height: 32px;
             animation: spin 1s linear infinite;
-            margin: 20px auto;
+            margin: 0 10px 0 0; display: inline-block; vertical-align: middle;
         }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
+        @keyframes spin { 0% { transform: rotate(0deg);} 100% { transform: rotate(360deg);} }
         .overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            border: 3px solid #667eea;
-            border-radius: 10px;
-            pointer-events: none;
+            position: absolute; inset: 0; border: 2px solid var(--ha-primary);
+            border-radius: 8px; pointer-events: none;
         }
-        
         .scan-line {
-            position: absolute;
-            width: 100%;
-            height: 2px;
-            background: linear-gradient(90deg, transparent, #667eea, transparent);
+            position: absolute; width: 100%; height: 2px;
+            background: linear-gradient(90deg, transparent, var(--ha-primary), transparent);
             animation: scan 2s linear infinite;
         }
-        
-        @keyframes scan {
-            0% { top: 0; }
-            100% { top: 100%; }
-        }
-        
-        button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+        @keyframes scan { 0% { top: 0; } 100% { top: 100%; } }
+        .ha-button {
+            background: var(--ha-primary);
+            color: #fff;
             border: none;
-            padding: 12px 30px;
-            border-radius: 25px;
-            font-size: 16px;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
             cursor: pointer;
-            margin-top: 15px;
+            margin-top: 12px;
             width: 100%;
-            transition: transform 0.2s;
         }
-        
-        button:hover {
-            transform: translateY(-2px);
-        }
-        
-        button:active {
-            transform: translateY(0);
-        }
-        
-        button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
+        .ha-button:disabled { opacity: 0.6; cursor: not-allowed; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🔐 Siedle QR-Code Scanner</h1>
-            <p>Scannen Sie Ihren Siedle QR-Code</p>
+    <div class="card">
+        <div class="card-header">
+            <div class="title">Siedle QR-Code Scanner</div>
+            <div class="subtitle">Scannen Sie Ihren Siedle QR-Code</div>
         </div>
-        
-        <div class="content">
+        <div class="card-content">
             <div id="qr-reader"></div>
             <div id="status" class="status info">
-                <div class="spinner"></div>
-                Kamera wird initialisiert...
+                <span class="spinner"></span>
+                <span style="vertical-align: middle;">Kamera wird initialisiert...</span>
             </div>
-            <button id="retry-btn" style="display: none;">Erneut versuchen</button>
+            <button id="retry-btn" class="ha-button" style="display: none;">Erneut versuchen</button>
         </div>
     </div>
 

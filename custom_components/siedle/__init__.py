@@ -98,6 +98,13 @@ async def async_setup(hass: HomeAssistant, config: dict):
     else:
         _LOGGER.info("Siedle QR callback view already registered")
     
+    # Register QR scanner HTML view (serves embedded index.html)
+    if not any(isinstance(view, SiedleQRScannerView) for view in hass.http.app.router._resources):
+        _LOGGER.info("Registering Siedle QR scanner view at /api/siedle/qr_scan")
+        hass.http.register_view(SiedleQRScannerView())
+    else:
+        _LOGGER.info("Siedle QR scanner view already registered")
+    
     return True
 
 
@@ -774,3 +781,19 @@ class SiedleQRCallbackView(HomeAssistantView):
                 status=500
             )
 
+class SiedleQRScannerView(HomeAssistantView):
+    """Serve the QR scanner page (embedded from index.html)."""
+
+    url = "/api/siedle/qr_scan"
+    name = "api:siedle:qr_scan"
+    requires_auth = False
+
+    async def get(self, request):
+        from aiohttp import web
+        from pathlib import Path
+
+        # Read scanner.html from the same folder as this file
+        current_dir = Path(__file__).resolve().parent
+        html_path = current_dir / "qrscanner.html"
+        html = html_path.read_text(encoding="utf-8")
+        return web.Response(text=html, content_type="text/html")
