@@ -79,7 +79,7 @@ DEFAULT_RECORDING_PATH = "www/siedle_recordings"
 # ==================== FCM Configuration ====================
 CONF_FCM_ENABLED = "fcm_enabled"  # FCM-based doorbell detection (recommended!)
 CONF_FCM_DEVICE_NAME = "fcm_device_name"  # Device name shown in Siedle main app
-DEFAULT_FCM_DEVICE_NAME = "Home Assistant"
+DEFAULT_FCM_DEVICE_NAME = "HomeAssistant"
 
 # ==================== FritzBox Click-to-Dial (F13) ====================
 CONF_FRITZBOX_ENABLED = "fritzbox_enabled"
