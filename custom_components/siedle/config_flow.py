@@ -81,8 +81,8 @@ class SiedleFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input=None):
         """Handle the initial step - redirect to external QR scanner."""
-        # Stelle sicher, dass die QR Callback View registriert ist
-        from . import SiedleQRCallbackView
+        # Stelle sicher, dass die QR Callback und Scanner Views registriert sind
+        from . import SiedleQRCallbackView, SiedleQRScannerView
         try:
             view_registered = any(
                 hasattr(view, 'name') and view.name == "api:siedle:qr_callback" 
@@ -93,6 +93,15 @@ class SiedleFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 self.hass.http.register_view(SiedleQRCallbackView())
             else:
                 _LOGGER.debug("Siedle QR callback view already registered")
+            scanner_registered = any(
+                hasattr(view, 'name') and view.name == "api:siedle:qr_scan"
+                for view in self.hass.http.app.router._resources
+            )
+            if not scanner_registered:
+                _LOGGER.info("Registering Siedle QR scanner view at /api/siedle/qr_scan")
+                self.hass.http.register_view(SiedleQRScannerView())
+            else:
+                _LOGGER.debug("Siedle QR scanner view already registered")
         except Exception as e:
             _LOGGER.error("Error registering view: %s", e)
         
@@ -103,7 +112,8 @@ class SiedleFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
         flow_id = self.flow_id
         callback_url = quote(f"{base_url}/api/siedle/qr_callback", safe=':/')
-        qr_scanner_url = f"{CONF_QR_CODE_URL}?config_flow_id={flow_id}&callback_url={callback_url}"
+        # Use internal scanner view instead of external URL
+        qr_scanner_url = f"{base_url}/api/siedle/qr_scan?config_flow_id={flow_id}&callback_url={callback_url}"
 
         return self.async_external_step(
             step_id="qr_scan",
