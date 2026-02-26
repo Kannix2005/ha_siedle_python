@@ -81,7 +81,7 @@ class SiedleFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input=None):
         """Handle the initial step - redirect to external QR scanner."""
-        # Stelle sicher, dass die QR Views registriert sind
+        # Ensure that the QR views are registered
         from . import SiedleQRCallbackView, SiedleQRScannerView
         try:
             registered_names = {
