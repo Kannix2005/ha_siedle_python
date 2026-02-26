@@ -81,30 +81,40 @@ class SiedleFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input=None):
         """Handle the initial step - redirect to external QR scanner."""
-        # Stelle sicher, dass die QR Callback View registriert ist
-        from . import SiedleQRCallbackView
+        # Ensure that the QR views are registered
+        from . import SiedleQRCallbackView, SiedleQRScannerView
         try:
-            view_registered = any(
-                hasattr(view, 'name') and view.name == "api:siedle:qr_callback" 
-                for view in self.hass.http.app.router._resources
-            )
-            if not view_registered:
-                _LOGGER.info("Registering Siedle QR callback view at /api/siedle/qr_callback")
+            registered_names = {
+                getattr(r, 'name', None) for r in self.hass.http.app.router._resources
+            }
+            if "api:siedle:qr_callback" not in registered_names:
+                _LOGGER.info("Registering Siedle QR callback view")
                 self.hass.http.register_view(SiedleQRCallbackView())
-            else:
-                _LOGGER.debug("Siedle QR callback view already registered")
+            if "api:siedle:qr_scanner" not in registered_names:
+                _LOGGER.info("Registering Siedle QR scanner view")
+                self.hass.http.register_view(SiedleQRScannerView())
         except Exception as e:
             _LOGGER.error("Error registering view: %s", e)
         
         # Build callback URL for QR scanner
-        base_url = self.hass.config.external_url or self.hass.config.internal_url
-        if not base_url:
-            base_url = "http://homeassistant.local:8123"
+        # Camera requires HTTPS (secure context). Prefer local HTTPS, 
+        # fall back to external hosted scanner if only HTTP is available.
+        external = self.hass.config.external_url
+        internal = self.hass.config.internal_url
+        base_url = external or internal or "http://homeassistant.local:8123"
 
         flow_id = self.flow_id
-        callback_url = quote(f"{base_url}/api/siedle/qr_callback", safe=':/')
-        qr_scanner_url = f"{CONF_QR_CODE_URL}?config_flow_id={flow_id}&callback_url={callback_url}"
+        callback_url = quote(f"{base_url}/api/siedle/qr_callback", safe='')
 
+        # Check if we have HTTPS available -> use local scanner
+        if (external and external.startswith("https://")) or \
+           (internal and internal.startswith("https://")):
+            # Use HTTPS URL for local scanner page
+            https_base = external if (external and external.startswith("https://")) else internal
+            qr_scanner_url = f"{https_base}/api/siedle/qr_scanner?config_flow_id={flow_id}&callback_url={callback_url}"
+        else:
+            # No HTTPS - fall back to external hosted scanner page
+            qr_scanner_url = f"{CONF_QR_CODE_URL}?config_flow_id={flow_id}&callback_url={callback_url}"
         return self.async_external_step(
             step_id="qr_scan",
             url=qr_scanner_url,

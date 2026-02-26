@@ -91,12 +91,20 @@ async def async_setup(hass: HomeAssistant, config: dict):
     """Set up the Siedle component."""
     hass.data.setdefault(DOMAIN, {})
     
-    # Register QR callback API endpoint only once
-    if not any(isinstance(view, SiedleQRCallbackView) for view in hass.http.app.router._resources):
+    # Register QR callback and scanner API endpoints only once
+    registered_names = {getattr(r, 'name', None) for r in hass.http.app.router._resources}
+    
+    if "api:siedle:qr_callback" not in registered_names:
         _LOGGER.info("Registering Siedle QR callback view at /api/siedle/qr_callback")
         hass.http.register_view(SiedleQRCallbackView())
     else:
-        _LOGGER.info("Siedle QR callback view already registered")
+        _LOGGER.debug("Siedle QR callback view already registered")
+    
+    if "api:siedle:qr_scanner" not in registered_names:
+        _LOGGER.info("Registering Siedle QR scanner view at /api/siedle/qr_scanner")
+        hass.http.register_view(SiedleQRScannerView())
+    else:
+        _LOGGER.debug("Siedle QR scanner view already registered")
     
     return True
 
@@ -707,6 +715,339 @@ class SiedleDataUpdateCoordinator(DataUpdateCoordinator):
             }
         except Exception as err:
             raise UpdateFailed(f"Error communicating with API: {err}")
+
+
+QR_SCANNER_HTML = """<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Siedle QR-Code Scanner</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white; border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 500px; width: 100%; overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; padding: 30px; text-align: center;
+        }
+        .header h1 { font-size: 24px; margin-bottom: 10px; }
+        .header p { font-size: 14px; opacity: 0.9; }
+        .content { padding: 30px; }
+        #qr-reader {
+            width: 100%; border-radius: 10px; overflow: hidden;
+            background: #f0f0f0; position: relative;
+        }
+        #qr-reader video { width: 100%; height: auto; display: block; }
+        .status {
+            margin-top: 20px; padding: 15px; border-radius: 10px;
+            text-align: center; font-size: 14px;
+        }
+        .status.info { background: #e3f2fd; color: #1976d2; }
+        .status.success { background: #e8f5e9; color: #388e3c; }
+        .status.error { background: #ffebee; color: #d32f2f; }
+        .status.warning { background: #fff3e0; color: #f57c00; }
+        .spinner {
+            border: 3px solid #f3f3f3; border-top: 3px solid #667eea;
+            border-radius: 50%; width: 40px; height: 40px;
+            animation: spin 1s linear infinite; margin: 20px auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .overlay {
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            border: 3px solid #667eea; border-radius: 10px; pointer-events: none;
+        }
+        .scan-line {
+            position: absolute; width: 100%; height: 2px;
+            background: linear-gradient(90deg, transparent, #667eea, transparent);
+            animation: scan 2s linear infinite;
+        }
+        @keyframes scan { 0% { top: 0; } 100% { top: 100%; } }
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; border: none; padding: 12px 30px;
+            border-radius: 25px; font-size: 16px; cursor: pointer;
+            margin-top: 15px; width: 100%; transition: transform 0.2s;
+        }
+        button:hover { transform: translateY(-2px); }
+        button:active { transform: translateY(0); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .manual-section { margin-top: 20px; display: none; }
+        .manual-section .divider {
+            text-align: center; margin: 20px 0; color: #999; font-size: 13px;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .manual-section .divider::before,
+        .manual-section .divider::after {
+            content: ''; flex: 1; height: 1px; background: #ddd;
+        }
+        .manual-section textarea {
+            width: 100%; min-height: 120px; padding: 12px;
+            border: 2px solid #ddd; border-radius: 10px;
+            font-family: monospace; font-size: 12px;
+            resize: vertical; transition: border-color 0.2s;
+        }
+        .manual-section textarea:focus { outline: none; border-color: #667eea; }
+        .manual-section .hint { font-size: 12px; color: #888; margin-top: 8px; line-height: 1.5; }
+        .http-warning {
+            background: #fff3e0; border: 1px solid #ffcc02; border-radius: 10px;
+            padding: 15px; margin-bottom: 15px; font-size: 13px; color: #e65100;
+            display: none;
+        }
+        .http-warning b { color: #bf360c; }
+        .tab-bar {
+            display: flex; gap: 0; margin-bottom: 15px; border-radius: 10px;
+            overflow: hidden; border: 2px solid #667eea;
+        }
+        .tab-bar button {
+            flex: 1; margin: 0; border-radius: 0; padding: 10px; font-size: 14px;
+            background: white; color: #667eea; transition: all 0.2s;
+        }
+        .tab-bar button:hover { transform: none; background: #f0f0ff; }
+        .tab-bar button.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>&#x1F510; Siedle QR-Code Scanner</h1>
+            <p>Scannen Sie Ihren Siedle QR-Code</p>
+        </div>
+        <div class="content">
+            <div id="http-warning" class="http-warning">
+                <b>&#x26A0;&#xFE0F; Kein HTTPS:</b> Die Kamera ben&ouml;tigt eine sichere Verbindung (HTTPS).
+                Bitte verwenden Sie die manuelle Eingabe unten oder richten Sie HTTPS ein
+                (z.B. &uuml;ber Nabu Casa oder einen Reverse Proxy).
+            </div>
+            <div class="tab-bar" id="tab-bar" style="display: none;">
+                <button id="tab-scan" class="active" onclick="switchTab('scan')">
+                    &#x1F4F7; Kamera Scan
+                </button>
+                <button id="tab-manual" onclick="switchTab('manual')">
+                    &#x270D;&#xFE0F; Manuell
+                </button>
+            </div>
+            <div id="scan-section">
+                <div id="qr-reader"></div>
+                <div id="status" class="status info">
+                    <div class="spinner"></div>
+                    Kamera wird initialisiert...
+                </div>
+                <button id="retry-btn" style="display: none;">Erneut versuchen</button>
+            </div>
+            <div id="manual-section" class="manual-section">
+                <div class="divider">QR-Code Inhalt einf&uuml;gen</div>
+                <textarea id="qr-input" placeholder="QR-Code Inhalt hier einf&uuml;gen... Scannen Sie den QR-Code mit einer beliebigen QR-App und f&uuml;gen Sie den Text hier ein. Der Inhalt beginnt typischerweise mit {&quot;susUrl&quot;:..."></textarea>
+                <div class="hint">
+                    &#x1F4A1; <b>So geht's:</b> &Ouml;ffnen Sie eine QR-Scanner App (z.B. die Kamera-App),
+                    scannen Sie den Siedle QR-Code und kopieren Sie den erkannten Text.
+                    F&uuml;gen Sie ihn dann hier ein.
+                </div>
+                <button id="submit-manual" onclick="submitManual()">&#x2705; QR-Daten absenden</button>
+            </div>
+        </div>
+    </div>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script>
+        var configFlowId = "%%CONFIG_FLOW_ID%%";
+        var callbackUrl = "%%CALLBACK_URL%%";
+        var statusDiv = document.getElementById('status');
+        var retryBtn = document.getElementById('retry-btn');
+        var manualSection = document.getElementById('manual-section');
+        var scanSection = document.getElementById('scan-section');
+        var tabBar = document.getElementById('tab-bar');
+        var httpWarning = document.getElementById('http-warning');
+        var html5QrCode = null;
+        var isScanning = false;
+        var isSecure = window.isSecureContext || location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+
+        function switchTab(tab) {
+            document.getElementById('tab-scan').className = tab === 'scan' ? 'active' : '';
+            document.getElementById('tab-manual').className = tab === 'manual' ? 'active' : '';
+            scanSection.style.display = tab === 'scan' ? 'block' : 'none';
+            manualSection.style.display = tab === 'manual' ? 'block' : 'none';
+        }
+
+        function showManualFallback(showWarning) {
+            tabBar.style.display = 'flex';
+            if (showWarning) { httpWarning.style.display = 'block'; }
+        }
+
+        function showManualOnly() {
+            tabBar.style.display = 'flex';
+            httpWarning.style.display = 'block';
+            switchTab('manual');
+        }
+
+        function submitManual() {
+            var qrInput = document.getElementById('qr-input').value.trim();
+            if (!qrInput) {
+                document.getElementById('qr-input').style.borderColor = '#d32f2f';
+                return;
+            }
+            if (!callbackUrl || !configFlowId) {
+                manualSection.innerHTML = '<div class="status error">&#x274C; Fehlende Parameter</div>';
+                return;
+            }
+            try { JSON.parse(qrInput); } catch(e) {
+                document.getElementById('qr-input').style.borderColor = '#d32f2f';
+                manualSection.querySelector('.hint').innerHTML = '<span style="color:#d32f2f">&#x274C; Der eingegebene Text ist kein g&uuml;ltiges JSON. Bitte pr&uuml;fen Sie den QR-Code Inhalt.</span>';
+                return;
+            }
+            var encodedResult = encodeURIComponent(qrInput);
+            var redirectUrl = callbackUrl + '?config_flow_id=' + configFlowId + '&result=' + encodedResult;
+            document.getElementById('submit-manual').disabled = true;
+            document.getElementById('submit-manual').textContent = 'Weiterleitung...';
+            window.location.href = redirectUrl;
+        }
+
+        function updateStatus(message, type, showSpinner) {
+            type = type || 'info';
+            showSpinner = showSpinner || false;
+            statusDiv.className = 'status ' + type;
+            statusDiv.innerHTML = showSpinner
+                ? '<div class="spinner"></div>' + message
+                : message;
+        }
+
+        function onScanSuccess(decodedText) {
+            if (isScanning) return;
+            isScanning = true;
+            updateStatus('&#x2705; QR-Code erfolgreich gescannt!', 'success');
+            html5QrCode.stop().then(function() {
+                if (callbackUrl && configFlowId) {
+                    updateStatus('&#x1F504; Weiterleitung zu Home Assistant...', 'info', true);
+                    var encodedResult = encodeURIComponent(decodedText);
+                    var redirectUrl = callbackUrl + '?config_flow_id=' + configFlowId + '&result=' + encodedResult;
+                    setTimeout(function() { window.location.href = redirectUrl; }, 1000);
+                } else {
+                    updateStatus('&#x274C; Fehlende Parameter: callback_url oder config_flow_id', 'error');
+                    retryBtn.style.display = 'block';
+                }
+            }).catch(function(err) { console.error('Error stopping scanner:', err); });
+        }
+
+        function onScanError() { }
+
+        function showCameraError(msg) {
+            updateStatus(msg, 'error');
+            retryBtn.style.display = 'block';
+            showManualFallback(false);
+        }
+
+        function addOverlay() {
+            var reader = document.getElementById('qr-reader');
+            var overlay = document.createElement('div');
+            overlay.className = 'overlay';
+            var scanLine = document.createElement('div');
+            scanLine.className = 'scan-line';
+            overlay.appendChild(scanLine);
+            reader.appendChild(overlay);
+        }
+
+        function startScanner() {
+            if (!callbackUrl || !configFlowId) {
+                updateStatus('&#x274C; Fehler: Fehlende URL-Parameter', 'error');
+                retryBtn.style.display = 'block';
+                return;
+            }
+            if (!isSecure) {
+                updateStatus('&#x26A0;&#xFE0F; Kamera nicht verf&uuml;gbar (kein HTTPS). Bitte manuelle Eingabe verwenden.', 'warning');
+                showManualOnly();
+                return;
+            }
+            updateStatus('&#x1F4F7; Kameraberechtigung wird angefordert...', 'info', true);
+            retryBtn.style.display = 'none';
+            html5QrCode = new Html5Qrcode('qr-reader');
+            var config = { fps: 10, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0 };
+            html5QrCode.start(
+                { facingMode: 'environment' }, config, onScanSuccess, onScanError
+            ).then(function() {
+                updateStatus('&#x1F4F8; Bereit zum Scannen - Halten Sie den QR-Code vor die Kamera', 'info');
+                showManualFallback(false);
+                addOverlay();
+            }).catch(function(err) {
+                console.error('Camera error:', err);
+                Html5Qrcode.getCameras().then(function(cameras) {
+                    if (cameras && cameras.length > 0) {
+                        updateStatus('&#x1F504; Starte Kamera...', 'warning', true);
+                        html5QrCode.start(
+                            cameras[0].id, config, onScanSuccess, onScanError
+                        ).then(function() {
+                            updateStatus('&#x1F4F8; Bereit zum Scannen - Halten Sie den QR-Code vor die Kamera', 'info');
+                            showManualFallback(false);
+                            addOverlay();
+                        }).catch(function(err2) {
+                            console.error('Fallback camera error:', err2);
+                            showCameraError('&#x274C; Kamera konnte nicht gestartet werden.');
+                        });
+                    } else {
+                        showCameraError('&#x274C; Keine Kamera gefunden.');
+                    }
+                }).catch(function(err2) {
+                    console.error('Get cameras error:', err2);
+                    showCameraError('&#x274C; Fehler beim Zugriff auf die Kamera: ' + err2);
+                });
+            });
+        }
+
+        retryBtn.addEventListener('click', function() {
+            isScanning = false;
+            if (html5QrCode) {
+                html5QrCode.stop().then(function() { startScanner(); }).catch(function() { startScanner(); });
+            } else { startScanner(); }
+        });
+
+        window.addEventListener('load', function() { setTimeout(startScanner, 500); });
+    </script>
+</body>
+</html>"""
+
+
+class SiedleQRScannerView(HomeAssistantView):
+    """Serve the QR code scanner page directly from Home Assistant."""
+
+    url = "/api/siedle/qr_scanner"
+    name = "api:siedle:qr_scanner"
+    requires_auth = False
+
+    async def get(self, request):
+        """Serve the QR scanner HTML page."""
+        from aiohttp import web
+
+        config_flow_id = request.query.get("config_flow_id", "")
+        callback_url = request.query.get("callback_url", "")
+
+        # If callback_url not provided as parameter, derive from request
+        if not callback_url:
+            scheme = request.headers.get("X-Forwarded-Proto", request.url.scheme)
+            host = request.headers.get("X-Forwarded-Host", request.host)
+            callback_url = f"{scheme}://{host}/api/siedle/qr_callback"
+            _LOGGER.debug("Derived callback_url from request: %s", callback_url)
+
+        try:
+            html_content = QR_SCANNER_HTML.replace(
+                "%%CONFIG_FLOW_ID%%", config_flow_id
+            ).replace(
+                "%%CALLBACK_URL%%", callback_url
+            )
+            return web.Response(text=html_content, content_type="text/html")
+        except Exception as err:
+            _LOGGER.error("Error building QR scanner page: %s", err)
+            return web.Response(text="Internal error", status=500)
 
 
 class SiedleQRCallbackView(HomeAssistantView):
