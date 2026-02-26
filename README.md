@@ -77,7 +77,10 @@ Or manually in HACS:
 
 1. In HA, go to **Settings → Devices & Services → Add Integration**
 2. Search for **"Siedle"**
-3. You'll be redirected to a QR scanner page
+3. You'll be redirected to a QR scanner page:
+   - **HTTPS setup** (e.g., Nabu Casa, Reverse Proxy): The QR scanner page is served directly by your Home Assistant instance. The phone camera can scan the QR code directly.
+   - **HTTP setup** (local network without HTTPS): Since the browser camera requires a secure context (HTTPS), you will be redirected to an external scanner page hosted at `stefan-altheimer.de`. The scanned data is sent back to your local HA instance via the callback URL.
+   - **Manual input**: If the camera doesn't work (e.g., desktop browser, no camera permission), the scanner page offers a manual input field. Simply scan the QR code with any QR scanner app on your phone, copy the text content and paste it into the field.
 4. Scan the QR code from the Siedle app (with the second device or webcam)
 5. The data will be automatically transmitted to HA
 
