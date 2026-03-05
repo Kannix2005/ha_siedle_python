@@ -18,7 +18,6 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-# Siedle Firebase Configuration (extracted from APK)
 SIEDLE_FIREBASE = {
     "project_id": "siedle-sus-android",
     "api_key": "AIzaSyDBeZC0fOq0b3WHZBUzvU2FM5nrLgglFQw",
