@@ -1,9 +1,6 @@
 """Constants for Siedle integration."""
 DOMAIN = "siedle"
 
-# Config Flow
-CONF_QR_CODE_URL = "http://www.stefan-altheimer.de/siedle/index.html"
-
 # Defaults
 DEFAULT_NAME = "Siedle"
 DEFAULT_SCAN_INTERVAL = 300
