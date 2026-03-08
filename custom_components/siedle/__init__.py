@@ -417,7 +417,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     # Register services
     await async_setup_services(hass, siedle)
 
+    # Reload integration when options change (e.g. external SIP enabled/disabled)
+    entry.async_on_unload(entry.add_update_listener(_async_reload_on_options_change))
+
     return True
+
+
+async def _async_reload_on_options_change(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the config entry when options are updated via the UI."""
+    _LOGGER.info("Options changed, reloading Siedle integration...")
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
@@ -460,6 +469,49 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
         hass.data[DOMAIN].pop(entry.entry_id)
 
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Clean up all persistent files when the integration is removed."""
+    entry_id = entry.entry_id
+    files_to_remove = []
+
+    # FCM credentials (old location in config root)
+    files_to_remove.append(hass.config.path(f".siedle_fcm_{entry_id}.json"))
+
+    # Token cache (old location in config root)
+    files_to_remove.append(hass.config.path(f".siedle_token_{entry_id}.json"))
+
+    # Token cache (new location in siedle/ subfolder)
+    siedle_data_dir = hass.config.path("siedle")
+    files_to_remove.append(os.path.join(siedle_data_dir, f"token_{entry_id}.json"))
+
+    def _cleanup_files():
+        removed = []
+        for path in files_to_remove:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                    removed.append(path)
+                except OSError as err:
+                    _LOGGER.warning("Could not remove %s: %s", path, err)
+
+        # Remove siedle/ directory if empty
+        if os.path.isdir(siedle_data_dir):
+            try:
+                if not os.listdir(siedle_data_dir):
+                    os.rmdir(siedle_data_dir)
+                    removed.append(siedle_data_dir)
+            except OSError:
+                pass
+
+        return removed
+
+    removed = await hass.async_add_executor_job(_cleanup_files)
+    if removed:
+        _LOGGER.info("Cleaned up %d file(s) for entry %s: %s", len(removed), entry_id, removed)
+    else:
+        _LOGGER.debug("No files to clean up for entry %s", entry_id)
 
 
 def _mqtt_callback(hass: HomeAssistant, entry: ConfigEntry, topic: str, payload: dict):
@@ -572,10 +624,7 @@ def _sip_state_callback(hass: HomeAssistant, entry: ConfigEntry, state, data: di
         if state_val == "answered":
             call_history_sensor.call_answered()
         elif state_val in ("idle", "ended"):
-            call_history_sensor.call_ended(
-                recording_file=data.get("recording_file"),
-                dtmf_door_opened=data.get("dtmf_door_opened", False),
-            )
+            call_history_sensor.call_ended(data=data)
     
     # Update recording sensor if recording file is available
     if "recording_file" in data:
