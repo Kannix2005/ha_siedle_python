@@ -417,7 +417,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     # Register services
     await async_setup_services(hass, siedle)
 
+    # Reload integration when options change (e.g. external SIP enabled/disabled)
+    entry.async_on_unload(entry.add_update_listener(_async_reload_on_options_change))
+
     return True
+
+
+async def _async_reload_on_options_change(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the config entry when options are updated via the UI."""
+    _LOGGER.info("Options changed, reloading Siedle integration...")
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
