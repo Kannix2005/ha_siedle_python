@@ -12,9 +12,10 @@ from datetime import datetime
 from typing import Callable, Optional, Dict, Any
 
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_call_later
 
-from .const import DOMAIN
+from .const import DOMAIN, SIGNAL_SIEDLE_CONNECTION_UPDATE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -449,9 +450,16 @@ class SiedleFCMHandler:
         if self._connected and not was_connected:
             _LOGGER.info("FCM connection established - doorbell detection active")
             self._fire_event("fcm_connected", {"status": "connected"})
+            # Dispatch signal so binary sensor updates immediately
+            self._hass.loop.call_soon_threadsafe(
+                async_dispatcher_send, self._hass, SIGNAL_SIEDLE_CONNECTION_UPDATE
+            )
         elif not self._connected and was_connected:
             _LOGGER.warning("FCM connection lost")
             self._fire_event("fcm_disconnected", {"status": "disconnected"})
+            self._hass.loop.call_soon_threadsafe(
+                async_dispatcher_send, self._hass, SIGNAL_SIEDLE_CONNECTION_UPDATE
+            )
     
     def _on_notification(self, message: dict, client_id: str):
         """Handle FCM notification message."""
