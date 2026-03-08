@@ -105,6 +105,15 @@ class SipConfig:
             display_name=data.get("display_name"),
         )
 
+    @property
+    def transport_str(self) -> str:
+        """SIP transport string for Via/Contact headers (TLS, TCP, or UDP)."""
+        if self.transport == SipTransport.TLS:
+            return "TLS"
+        if self.transport == SipTransport.TCP:
+            return "TCP"
+        return "UDP"
+
 
 @dataclass
 class SipCall:
@@ -382,7 +391,7 @@ class SipConnection:
         branch = uuid.uuid4().hex[:12]
         uri = f"sip:{self.config.host}"
         
-        transport_str = "TLS" if self.config.transport == SipTransport.TLS else "UDP"
+        transport_str = self.config.transport_str
         
         lines = [
             f"REGISTER {uri} SIP/2.0",
@@ -428,7 +437,7 @@ class SipConnection:
         branch = uuid.uuid4().hex[:12]
         cseq = 1
         
-        transport_str = "TLS" if self.config.transport == SipTransport.TLS else "UDP"
+        transport_str = self.config.transport_str
         display_name = self.config.display_name or "Siedle Türstation"
         
         # Use custom SDP or generate default
@@ -486,7 +495,7 @@ class SipConnection:
         """
         local_ip = self._get_local_ip()
         to_tag = uuid.uuid4().hex[:8]
-        transport_str = "TLS" if self.config.transport == SipTransport.TLS else "UDP"
+        transport_str = self.config.transport_str
         
         # Build To header with tag for 200 OK
         to_header = request.to_header
@@ -540,7 +549,7 @@ class SipConnection:
         local_ip = self._get_local_ip()
         cseq = call.next_cseq()
         branch = uuid.uuid4().hex[:12]
-        transport_str = "TLS" if self.config.transport == SipTransport.TLS else "UDP"
+        transport_str = self.config.transport_str
         
         to_header = f"<{call.to_uri}>"
         if call.to_tag:
@@ -565,7 +574,7 @@ class SipConnection:
         """Create SIP ACK message."""
         local_ip = self._get_local_ip()
         branch = uuid.uuid4().hex[:12]
-        transport_str = "TLS" if self.config.transport == SipTransport.TLS else "UDP"
+        transport_str = self.config.transport_str
         
         # Extract to_tag from response
         to_header = for_response.to_header
@@ -598,20 +607,28 @@ class SipConnection:
                 self._ssl_socket = context.wrap_socket(sock, server_hostname=self.config.host)
                 self._ssl_socket.connect((self.config.host, self.config.port))
                 self._socket = self._ssl_socket
-                _LOGGER.info(f"{self.name}: TLS connection established")
+                self._local_ip = self._socket.getsockname()[0]
+                self._local_port = self._socket.getsockname()[1]
+                _LOGGER.info(f"{self.name}: TLS connection established (local {self._local_ip}:{self._local_port})")
             elif self.config.transport == SipTransport.TCP:
                 # TCP connection
                 self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self._socket.settimeout(30)
                 self._socket.connect((self.config.host, self.config.port))
-                _LOGGER.info(f"{self.name}: TCP connection established")
+                self._local_ip = self._socket.getsockname()[0]
+                self._local_port = self._socket.getsockname()[1]
+                _LOGGER.info(f"{self.name}: TCP connection established (local {self._local_ip}:{self._local_port})")
             else:
                 # UDP connection
                 self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 self._socket.settimeout(5)
                 # For UDP, we don't "connect" but we set default destination
                 self._socket.connect((self.config.host, self.config.port))
-                _LOGGER.info(f"{self.name}: UDP socket ready")
+                # Update local port to actual OS-assigned port (important for Via/Contact headers!)
+                actual_addr = self._socket.getsockname()
+                self._local_ip = actual_addr[0]
+                self._local_port = actual_addr[1]
+                _LOGGER.info(f"{self.name}: UDP socket ready (local {self._local_ip}:{self._local_port})")
             
             self._connected = True
             return True
@@ -629,9 +646,10 @@ class SipConnection:
         
         try:
             # Send initial REGISTER
-            _LOGGER.info(f"{self.name}: Sending initial REGISTER to {self.config.host}:{self.config.port}...")
+            _LOGGER.info(f"{self.name}: Sending initial REGISTER to {self.config.host}:{self.config.port} "
+                         f"(local {self._local_ip}:{self._local_port}, user={self.config.username})...")
             register_msg = self._create_register(with_auth=False)
-            _LOGGER.debug(f"{self.name}: REGISTER message:\n{register_msg.decode()[:500]}...")
+            _LOGGER.info(f"{self.name}: REGISTER message ({len(register_msg)} bytes):\n{register_msg.decode()[:800]}")
             self._socket.send(register_msg)
             
             response = self._socket.recv(4096)
@@ -883,7 +901,7 @@ class SipConnection:
         local_ip = self._get_local_ip()
         cseq = self._next_cseq()
         branch = uuid.uuid4().hex[:12]
-        transport_str = "TLS" if self.config.transport == SipTransport.TLS else "UDP"
+        transport_str = self.config.transport_str
         
         options_msg = (
             f"OPTIONS sip:{self.config.host} SIP/2.0\r\n"
@@ -1178,7 +1196,7 @@ class SipCallManager:
         
         local_ip = self._external_conn._get_local_ip()
         local_port = self._external_conn.config.port
-        transport_str = "TLS" if self._external_conn.config.transport == SipTransport.TLS else "UDP"
+        transport_str = self._external_conn.config.transport_str
         branch = uuid.uuid4().hex[:12]
         
         targets = self._get_forward_targets()
@@ -1521,7 +1539,7 @@ class SipCallManager:
                     # Reuse the same SDP from the original INVITE
                     local_ip = self._external_conn._get_local_ip()
                     branch = uuid.uuid4().hex[:12]
-                    transport_str = "TLS" if self._external_conn.config.transport == SipTransport.TLS else "UDP"
+                    transport_str = self._external_conn.config.transport_str
                     
                     # We need the SDP — reconstruct from rtp_bridge
                     sdp_ip_b = local_ip
