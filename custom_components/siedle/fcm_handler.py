@@ -137,7 +137,7 @@ class SiedleFCMHandler:
             daemon=True
         )
         self._thread.start()
-        _LOGGER.info(f"FCM listener thread started: {self._thread.name}, alive={self._thread.is_alive()}")
+        _LOGGER.debug("FCM listener thread started: %s", self._thread.name)
         
         _LOGGER.info("Siedle FCM handler started")
         return True
@@ -169,7 +169,7 @@ class SiedleFCMHandler:
         """Load existing FCM credentials or create new ones."""
         try:
             if os.path.exists(self._fcm_credentials_file):
-                _LOGGER.info(f"Loading FCM credentials from {self._fcm_credentials_file}")
+                _LOGGER.debug("Loading FCM credentials from %s", self._fcm_credentials_file)
                 with open(self._fcm_credentials_file, 'r') as f:
                     creds = json.load(f)
                 
@@ -189,7 +189,7 @@ class SiedleFCMHandler:
                 else:
                     self._client.create_new_keys()
                 
-                _LOGGER.info(f"FCM credentials loaded, token: {self._fcm_token[:30]}...")
+                _LOGGER.debug("FCM credentials loaded, token: %s...", self._fcm_token[:20])
                 return True
             
             # Create new registration using Android-style registration
@@ -203,7 +203,7 @@ class SiedleFCMHandler:
             # Do Android-style registration manually
             try:
                 android_id, security_token, gcm_token = self._register_android_fcm()
-                _LOGGER.info(f"Android FCM registration complete: android_id={android_id}, gcm_token={gcm_token[:30] if gcm_token else 'None'}...")
+                _LOGGER.debug("Android FCM registration complete: android_id=%s", android_id)
             except Exception as reg_err:
                 _LOGGER.error(f"Android FCM registration failed: {reg_err}")
                 import traceback
@@ -227,10 +227,11 @@ class SiedleFCMHandler:
                 "auth_secret_b64": auth_b64,
             }
             
-            with open(self._fcm_credentials_file, 'w') as f:
+            fd = os.open(self._fcm_credentials_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
                 json.dump(creds, f, indent=2)
             
-            _LOGGER.info(f"FCM registration successful, token: {gcm_token[:30]}...")
+            _LOGGER.info("FCM registration successful")
             return True
             
         except Exception as e:
@@ -400,45 +401,23 @@ class SiedleFCMHandler:
     
     def _listener_thread(self):
         """Background thread for FCM message reception."""
-        _LOGGER.info("FCM listener thread started")
-        
-        # Verify client state before starting
-        _LOGGER.info(f"FCM client state: android_id={self._client.android_id}, "
-                     f"security_token={'set' if self._client.security_token else 'NOT SET'}, "
-                     f"private_key={'set' if self._client.private_key else 'NOT SET'}, "
-                     f"auth_secret={'set' if self._client.auth_secret else 'NOT SET'}")
-        
-        # Setup callbacks
+        _LOGGER.debug("FCM listener thread started")
+
         self._client.on_notification_message = self._on_notification
         self._client.on_data_message = self._on_data_message
         self._client.on_connection_status = self._on_connection_status
-        
-        # Also log any raw messages the library receives
-        original_on_raw = getattr(self._client, 'on_raw_message', None)
-        def _on_raw_message(msg, client_id):
-            _LOGGER.info(f"FCM raw message received! Type: {type(msg).__name__}")
-            if original_on_raw:
-                original_on_raw(msg, client_id)
-        if hasattr(self._client, 'on_raw_message'):
-            self._client.on_raw_message = _on_raw_message
-        
+
         try:
-            # Start listening (blocking) - method is start_listening() not start()
-            _LOGGER.info("Calling FCM start_listening()...")
             self._client.start_listening()
-            _LOGGER.info("FCM start_listening() returned (should not happen normally)")
+            _LOGGER.debug("FCM start_listening() returned")
         except RuntimeError as e:
-            _LOGGER.error(f"FCM listener RuntimeError: {e}")
-            import traceback
-            _LOGGER.error(traceback.format_exc())
+            _LOGGER.exception("FCM listener RuntimeError: %s", e)
         except Exception as e:
             if self._running:
-                _LOGGER.error(f"FCM listener error: {e}")
-                import traceback
-                _LOGGER.error(traceback.format_exc())
+                _LOGGER.exception("FCM listener error: %s", e)
         finally:
             self._connected = False
-            _LOGGER.info("FCM listener thread ended")
+            _LOGGER.debug("FCM listener thread ended")
     
     def _on_connection_status(self, status: str, client_id: str):
         """Handle FCM connection status changes."""
@@ -463,17 +442,14 @@ class SiedleFCMHandler:
     
     def _on_notification(self, message: dict, client_id: str):
         """Handle FCM notification message."""
-        _LOGGER.info(f"FCM notification received! Keys: {list(message.keys()) if isinstance(message, dict) else type(message).__name__}")
-        _LOGGER.debug(f"FCM notification full: {message}")
+        _LOGGER.debug("FCM notification received: %s", list(message.keys()) if isinstance(message, dict) else type(message).__name__)
         self._process_message(message)
-    
+
     def _on_data_message(self, data: bytes, client_id: str):
         """Handle FCM data message."""
-        _LOGGER.info(f"FCM data message received! Size: {len(data) if data else 0} bytes")
-        _LOGGER.debug(f"FCM data message raw: {data[:200] if data else 'None'}")
+        _LOGGER.debug("FCM data message received (%d bytes)", len(data) if data else 0)
         try:
             message = json.loads(data.decode())
-            _LOGGER.info(f"FCM data parsed: keys={list(message.keys())}")
             self._process_message({"payload": {"data": message}})
         except Exception as e:
             _LOGGER.warning(f"Failed to parse FCM data: {e}")
