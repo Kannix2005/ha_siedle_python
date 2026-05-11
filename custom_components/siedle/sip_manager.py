@@ -643,7 +643,13 @@ class SipConnection:
         if not self._connected:
             if not self.connect():
                 return False
-        
+
+        # Cap recv timeout at 10s so executor threads don't block longer than needed
+        try:
+            self._socket.settimeout(10)
+        except Exception:
+            pass
+
         try:
             # Send initial REGISTER
             _LOGGER.info(f"{self.name}: Sending initial REGISTER to {self.config.host}:{self.config.port} "
@@ -2242,6 +2248,12 @@ class SipCallManager:
             # Check Siedle connection
             if self._siedle_conn and self._siedle_conn.connection_lost:
                 _LOGGER.warning("Siedle SIP connection lost — attempting reconnect...")
+                # Clean up any active call so RTP bridge doesn't keep running
+                if self._siedle_call is not None:
+                    try:
+                        self._end_call()
+                    except Exception as e:
+                        _LOGGER.warning(f"Error ending call on connection loss: {e}")
                 for attempt in range(3):
                     if not self._running:
                         break

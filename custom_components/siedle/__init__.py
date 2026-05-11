@@ -83,6 +83,8 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON, Platform.CAMERA]
 
+_reloading_entries: set = set()
+
 # This integration is config entry only
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -417,16 +419,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     # Register services
     await async_setup_services(hass, siedle)
 
-    # Reload integration when options change (e.g. external SIP enabled/disabled)
+    # Reload integration when options change (e.g. SIP/FCM settings)
     entry.async_on_unload(entry.add_update_listener(_async_reload_on_options_change))
 
     return True
 
 
 async def _async_reload_on_options_change(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload the config entry when options are updated via the UI."""
-    _LOGGER.info("Options changed, reloading Siedle integration...")
-    await hass.config_entries.async_reload(entry.entry_id)
+    """Reload the config entry when options are updated via the UI.
+
+    Guard against double-reload: HA 2026.5 may trigger an additional reload after
+    OptionsFlow completes. If a reload for this entry is already in progress we skip
+    the second trigger instead of racing.
+    """
+    if entry.entry_id in _reloading_entries:
+        _LOGGER.debug("Siedle reload already in progress for %s, skipping duplicate", entry.entry_id)
+        return
+    _reloading_entries.add(entry.entry_id)
+    try:
+        _LOGGER.info("Options changed, reloading Siedle integration...")
+        await hass.config_entries.async_reload(entry.entry_id)
+    finally:
+        _reloading_entries.discard(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
