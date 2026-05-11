@@ -379,8 +379,8 @@ class Siedle:
             response.raise_for_status()
             return response.json()
         except requests.HTTPError as e:
-            _LOGGER.error("HTTP Error Siedle API: %s" % e)
-            if e.response.status_code == 401:
+            _LOGGER.error("HTTP Error Siedle API: %s", e)
+            if e.response is not None and e.response.status_code == 401:
                 self.refreshToken()
                 response = self._client.get(url, timeout=30)
                 response.raise_for_status()
@@ -405,10 +405,10 @@ class Siedle:
             response.raise_for_status()
             return response.json() if response.text else {}
         except requests.HTTPError as e:
-            _LOGGER.error("HTTP Error Siedle API: %s" % e)
-            if e.response.status_code == 401:
+            _LOGGER.error("HTTP Error Siedle API: %s", e)
+            if e.response is not None and e.response.status_code == 401:
                 self.refreshToken()
-                _LOGGER.info("Retrying with new Token...")
+                _LOGGER.debug("Retrying POST with refreshed token")
                 response = self._client.post(url, json=data, timeout=30)
                 response.raise_for_status()
                 return response.json() if response.text else {}
@@ -432,14 +432,14 @@ class Siedle:
             response.raise_for_status()
             return response.json() if response.text else {}
         except requests.HTTPError as e:
-            _LOGGER.error("HTTP Error Siedle API: %s" % e)
-            if e.response.status_code == 401:
+            _LOGGER.error("HTTP Error Siedle API: %s", e)
+            if e.response is not None and e.response.status_code == 401:
                 self.refreshToken()
                 response = self._client.put(url, json=data, timeout=30)
                 response.raise_for_status()
                 return response.json() if response.text else {}
         except requests.exceptions.RequestException as e:
-            _LOGGER.error("Error Siedle API: %s with data: %s" % (e, data))
+            _LOGGER.error("Error Siedle API: %s", e)
             raise
 
 
@@ -693,12 +693,12 @@ class Siedle:
     
     def _on_mqtt_disconnect(self, client, userdata, rc, properties=None):
         """Callback when MQTT connection is lost (paho-mqtt 2.0 compatible)"""
-        _LOGGER.warning(f"MQTT disconnected with code {rc}")
+        _LOGGER.warning("MQTT disconnected with code %s", rc)
         self._mqtt_connected = False
     
     def _on_mqtt_message(self, client, userdata, msg):
         """Callback when MQTT message is received"""
-        _LOGGER.info(f"MQTT message received on topic '{msg.topic}': {msg.payload}")
+        _LOGGER.debug("MQTT message on topic '%s'", msg.topic)
         
         try:
             payload = json.loads(msg.payload.decode('utf-8'))
@@ -708,10 +708,10 @@ class Siedle:
                 try:
                     callback(msg.topic, payload)
                 except Exception as e:
-                    _LOGGER.error(f"Error in MQTT callback: {e}")
+                    _LOGGER.error("Error in MQTT callback: %s", e)
             
         except json.JSONDecodeError:
-            _LOGGER.warning(f"Non-JSON MQTT message: {msg.payload}")
+            _LOGGER.warning("Non-JSON MQTT message on topic '%s'", msg.topic)
     
     def connect_mqtt(self, on_message_callback=None):
         """
@@ -737,7 +737,7 @@ class Siedle:
             _LOGGER.error("MQTT credentials not available")
             return False
         
-        _LOGGER.info(f"Connecting to MQTT broker {mqtt_config['host']}:{mqtt_config['port']}...")
+        _LOGGER.info("Connecting to MQTT broker %s:%s", mqtt_config['host'], mqtt_config['port'])
         
         # Create MQTT client
         self._mqtt_client = mqtt.Client(
@@ -767,33 +767,40 @@ class Siedle:
         if on_message_callback:
             self._mqtt_callbacks.append(on_message_callback)
         
-        try:
-            # Connect to broker
-            self._mqtt_client.connect(
-                mqtt_config['host'],
-                mqtt_config['port'],
-                keepalive=60
-            )
-            
-            # Start network loop in background thread
-            self._mqtt_client.loop_start()
-            
-            # Wait for connection
-            timeout = 10
-            start_time = time.time()
-            while not self._mqtt_connected and (time.time() - start_time) < timeout:
-                time.sleep(0.1)
-            
-            if self._mqtt_connected:
-                _LOGGER.info("MQTT connection established")
-                return True
-            else:
-                _LOGGER.error("MQTT connection timeout")
-                return False
-                
-        except Exception as e:
-            _LOGGER.error(f"Failed to connect to MQTT: {e}")
-            return False
+        # Enable paho auto-reconnect for post-connect drops (1s–30s backoff)
+        self._mqtt_client.reconnect_delay_set(min_delay=1, max_delay=30)
+
+        for attempt in range(3):
+            try:
+                self._mqtt_client.connect(
+                    mqtt_config['host'],
+                    mqtt_config['port'],
+                    keepalive=60,
+                )
+                self._mqtt_client.loop_start()
+
+                # Wait up to 10s for on_connect callback
+                deadline = time.time() + 10
+                while not self._mqtt_connected and time.time() < deadline:
+                    time.sleep(0.1)
+
+                if self._mqtt_connected:
+                    _LOGGER.info("MQTT connection established")
+                    return True
+
+                _LOGGER.warning("MQTT connection attempt %d/3 timed out", attempt + 1)
+                self._mqtt_client.loop_stop()
+                self._mqtt_connected = False
+
+            except Exception as e:
+                _LOGGER.warning("MQTT connect attempt %d/3 failed: %s", attempt + 1, e)
+
+            if attempt < 2:
+                delay = 2 ** attempt  # 1s, 2s
+                time.sleep(delay)
+
+        _LOGGER.error("MQTT connection failed after 3 attempts")
+        return False
     
     def disconnect_mqtt(self):
         """Disconnect from MQTT broker"""
@@ -1060,7 +1067,7 @@ class Siedle:
             ip = s.getsockname()[0]
             s.close()
             return ip
-        except:
+        except OSError:
             return "192.168.1.100"
     
     def _compute_sip_digest(self, method: str, uri: str, realm: str, nonce: str, 
@@ -1300,7 +1307,7 @@ class Siedle:
             if self._sip_socket:
                 try:
                     self._sip_socket.close()
-                except:
+                except OSError:
                     pass
             self._sip_socket = None
             self._sip_registered = False
@@ -1313,7 +1320,7 @@ class Siedle:
         if self._sip_socket:
             try:
                 self._sip_socket.close()
-            except:
+            except OSError:
                 pass
         _LOGGER.info("SIP listener stop requested")
     

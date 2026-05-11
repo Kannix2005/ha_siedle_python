@@ -111,6 +111,10 @@ SIP_TRANSPORTS = [SIP_TRANSPORT_UDP, SIP_TRANSPORT_TCP, SIP_TRANSPORT_TLS]
 # ==================== Dispatcher Signals ====================
 SIGNAL_SIEDLE_CONNECTION_UPDATE = f"{DOMAIN}_connection_update"
 
+# ==================== Internal constants ====================
+SIEDLE_DATA_DIR = "siedle"
+TASK_NAME_FCM_SETUP = "siedle_fcm_setup"
+
 # ==================== DTMF Event Codes (RFC 4733) ====================
 DTMF_EVENT_MAP = {
     0: "0", 1: "1", 2: "2", 3: "3", 4: "4",

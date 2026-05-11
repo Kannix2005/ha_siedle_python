@@ -597,10 +597,9 @@ class SipConnection:
     def connect(self) -> bool:
         """Connect to SIP server."""
         try:
-            _LOGGER.info(f"{self.name}: Connecting to {self.config.host}:{self.config.port} ({self.config.transport.value})...")
-            
+            _LOGGER.debug("%s: Connecting to %s:%s (%s)...", self.name, self.config.host, self.config.port, self.config.transport.value)
+
             if self.config.transport == SipTransport.TLS:
-                # TLS connection
                 context = ssl.create_default_context()
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(30)
@@ -609,32 +608,28 @@ class SipConnection:
                 self._socket = self._ssl_socket
                 self._local_ip = self._socket.getsockname()[0]
                 self._local_port = self._socket.getsockname()[1]
-                _LOGGER.info(f"{self.name}: TLS connection established (local {self._local_ip}:{self._local_port})")
+                _LOGGER.debug("%s: TLS connected (local %s:%s)", self.name, self._local_ip, self._local_port)
             elif self.config.transport == SipTransport.TCP:
-                # TCP connection
                 self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self._socket.settimeout(30)
                 self._socket.connect((self.config.host, self.config.port))
                 self._local_ip = self._socket.getsockname()[0]
                 self._local_port = self._socket.getsockname()[1]
-                _LOGGER.info(f"{self.name}: TCP connection established (local {self._local_ip}:{self._local_port})")
+                _LOGGER.debug("%s: TCP connected (local %s:%s)", self.name, self._local_ip, self._local_port)
             else:
-                # UDP connection
                 self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 self._socket.settimeout(5)
-                # For UDP, we don't "connect" but we set default destination
                 self._socket.connect((self.config.host, self.config.port))
-                # Update local port to actual OS-assigned port (important for Via/Contact headers!)
                 actual_addr = self._socket.getsockname()
                 self._local_ip = actual_addr[0]
                 self._local_port = actual_addr[1]
-                _LOGGER.info(f"{self.name}: UDP socket ready (local {self._local_ip}:{self._local_port})")
-            
+                _LOGGER.debug("%s: UDP socket ready (local %s:%s)", self.name, self._local_ip, self._local_port)
+
             self._connected = True
             return True
-            
+
         except Exception as e:
-            _LOGGER.error(f"{self.name}: Connection failed: {e}")
+            _LOGGER.error("%s: Connection failed: %s", self.name, e)
             self._connected = False
             return False
     
@@ -651,87 +646,70 @@ class SipConnection:
             pass
 
         try:
-            # Send initial REGISTER
-            _LOGGER.info(f"{self.name}: Sending initial REGISTER to {self.config.host}:{self.config.port} "
-                         f"(local {self._local_ip}:{self._local_port}, user={self.config.username})...")
+            _LOGGER.debug("%s: Sending REGISTER to %s:%s (user=%s)", self.name, self.config.host, self.config.port, self.config.username)
             register_msg = self._create_register(with_auth=False)
-            _LOGGER.info(f"{self.name}: REGISTER message ({len(register_msg)} bytes):\n{register_msg.decode()[:800]}")
+            _LOGGER.debug("%s: REGISTER (%d bytes):\n%s", self.name, len(register_msg), register_msg.decode()[:800])
             self._socket.send(register_msg)
-            
+
             response = self._socket.recv(4096)
             msg = self.parse_message(response)
-            _LOGGER.info(f"{self.name}: Response: {msg.status_code} {msg.status_text}")
-            
-            # Learn external IP from Via received= parameter
+            _LOGGER.debug("%s: Response: %s %s", self.name, msg.status_code, msg.status_text)
+
             self._extract_via_received(msg)
-            
+
             if msg.status_code == 401 or msg.status_code == 407:
-                # Extract auth params
                 www_auth = msg.headers.get("WWW-Authenticate") or msg.headers.get("Proxy-Authenticate", "")
-                _LOGGER.info(f"{self.name}: Auth required - extracting credentials from WWW-Authenticate header")
-                _LOGGER.debug(f"{self.name}: Auth header: {www_auth}")
-                
+                _LOGGER.debug("%s: Auth required (WWW-Authenticate present: %s)", self.name, bool(www_auth))
+
                 if not www_auth:
-                    _LOGGER.error(f"{self.name}: No WWW-Authenticate header found! Headers: {list(msg.headers.keys())}")
-                    _LOGGER.error(f"{self.name}: Full response:\n{msg.raw[:1000]}")
+                    _LOGGER.error("%s: No WWW-Authenticate header in 401. Headers: %s", self.name, list(msg.headers.keys()))
                     return False
-                
+
                 realm_match = re.search(r'realm="([^"]+)"', www_auth)
                 nonce_match = re.search(r'nonce="([^"]+)"', www_auth)
-                
+
                 if realm_match and nonce_match:
                     self._realm = realm_match.group(1)
                     self._nonce = nonce_match.group(1)
-                    _LOGGER.info(f"{self.name}: Extracted realm={self._realm}, nonce={self._nonce[:20]}...")
-                    
-                    # Authenticated REGISTER
-                    _LOGGER.info(f"{self.name}: Sending authenticated REGISTER...")
+                    _LOGGER.debug("%s: Auth challenge: realm=%s", self.name, self._realm)
+
                     auth_register = self._create_register(with_auth=True)
-                    _LOGGER.debug(f"{self.name}: Auth REGISTER message:\n{auth_register.decode()[:800]}...")
+                    _LOGGER.debug("%s: Auth REGISTER:\n%s", self.name, auth_register.decode()[:800])
                     self._socket.send(auth_register)
-                    
+
                     response = self._socket.recv(4096)
                     msg = self.parse_message(response)
-                    _LOGGER.info(f"{self.name}: Auth response: {msg.status_code} {msg.status_text}")
-                    
-                    # Learn external IP from Via received= parameter
+                    _LOGGER.debug("%s: Auth response: %s %s", self.name, msg.status_code, msg.status_text)
+
                     self._extract_via_received(msg)
-                    
+
                     if msg.status_code == 200:
-                        _LOGGER.info(f"{self.name}: Registration successful!")
                         self._registered = True
-                        
-                        # If we still don't know external IP, try STUN
+                        _LOGGER.info("%s: SIP registration successful", self.name)
                         if not self._external_ip:
                             self._discover_external_ip_via_stun()
-                        
                         if self._external_ip:
-                            _LOGGER.info(f"{self.name}: Will use external IP {self._external_ip} in SDP for NAT traversal")
+                            _LOGGER.debug("%s: External IP for SDP: %s", self.name, self._external_ip)
                         else:
-                            _LOGGER.warning(f"{self.name}: Could not determine external IP - RTP may fail behind NAT")
-                        
+                            _LOGGER.warning("%s: Could not determine external IP — RTP may fail behind NAT", self.name)
                         return True
                     else:
-                        _LOGGER.error(f"{self.name}: Registration failed: {msg.status_code} {msg.status_text}")
-                        _LOGGER.error(f"{self.name}: Response body: {msg.raw[:500]}")
+                        _LOGGER.error("%s: Registration failed: %s %s\n%s", self.name, msg.status_code, msg.status_text, msg.raw[:500])
                         return False
                 else:
-                    _LOGGER.error(f"{self.name}: Could not extract realm/nonce from: {www_auth}")
+                    _LOGGER.error("%s: Could not extract realm/nonce from WWW-Authenticate", self.name)
             elif msg.status_code == 200:
-                _LOGGER.info(f"{self.name}: Registration successful (no auth needed)")
                 self._registered = True
-                
-                # If we still don't know external IP, try STUN
+                _LOGGER.info("%s: SIP registration successful (no auth)", self.name)
                 if not self._external_ip:
                     self._discover_external_ip_via_stun()
-                
                 return True
             else:
-                _LOGGER.error(f"{self.name}: Unexpected response: {msg.status_code}")
+                _LOGGER.error("%s: Unexpected REGISTER response: %s", self.name, msg.status_code)
                 return False
-                
+
         except Exception as e:
-            _LOGGER.error(f"{self.name}: Registration error: {e}")
+            _LOGGER.error("%s: Registration error: %s", self.name, e)
             return False
     
     def send(self, data: bytes):
@@ -839,9 +817,9 @@ class SipConnection:
                 
                 self._notify_callbacks(msg)
         if self._connection_lost:
-            _LOGGER.warning(f"{self.name}: Listen loop ended — connection lost, notifying for reconnect")
+            _LOGGER.warning("%s: Listen loop ended — connection lost, notifying for reconnect", self.name)
         else:
-            _LOGGER.info(f"{self.name}: Listen loop ended")
+            _LOGGER.debug("%s: Listen loop ended", self.name)
     
     def _handle_register_auth_challenge(self, msg: SipMessage):
         """Handle 401/407 from REGISTER by extracting new nonce and retrying."""
@@ -867,7 +845,7 @@ class SipConnection:
     
     def _keepalive_loop(self):
         """Periodic keepalive and re-registration loop."""
-        _LOGGER.info(f"{self.name}: Keepalive loop started (OPTIONS every {self.keepalive_interval}s, re-REGISTER every {self.re_register_interval}s)")
+        _LOGGER.debug("%s: Keepalive loop started (OPTIONS every %ss, re-REGISTER every %ss)", self.name, self.keepalive_interval, self.re_register_interval)
         while self._running and not self._connection_lost:
             time.sleep(1)
             now = time.time()
@@ -890,7 +868,7 @@ class SipConnection:
             # Re-register periodically
             if (now - self._last_register_time) > self.re_register_interval:
                 try:
-                    _LOGGER.info(f"{self.name}: Sending re-REGISTER (periodic refresh)...")
+                    _LOGGER.debug("%s: Sending re-REGISTER (periodic refresh)", self.name)
                     self._send_re_register()
                     self._last_register_time = now
                 except Exception as e:
@@ -898,7 +876,7 @@ class SipConnection:
                     self._connection_lost = True
                     break
         
-        _LOGGER.info(f"{self.name}: Keepalive loop ended (connection_lost={self._connection_lost})")
+        _LOGGER.debug("%s: Keepalive loop ended (connection_lost=%s)", self.name, self._connection_lost)
     
     def _send_options_keepalive(self):
         """Send SIP OPTIONS as keepalive to detect dead connections."""
@@ -942,7 +920,7 @@ class SipConnection:
         if self._socket:
             try:
                 self._socket.close()
-            except:
+            except OSError:
                 pass
             self._socket = None
         
@@ -2193,9 +2171,9 @@ class SipCallManager:
         if self._siedle_conn:
             try:
                 self._siedle_conn.stop()
-            except:
-                pass
-        
+            except Exception as e:
+                _LOGGER.debug("Error stopping old Siedle SIP connection: %s", e)
+
         # Create new connection
         self._siedle_conn = SipConnection(self.siedle_config, name="Siedle-SIP")
         if self._siedle_conn.register():
@@ -2224,9 +2202,9 @@ class SipCallManager:
         if self._external_conn:
             try:
                 self._external_conn.stop()
-            except:
-                pass
-        
+            except Exception as e:
+                _LOGGER.debug("Error stopping old external SIP connection: %s", e)
+
         self._external_conn = SipConnection(self.external_config, name="External-SIP")
         if self._external_conn.register():
             _LOGGER.info("External SIP reconnected successfully!")
