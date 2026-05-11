@@ -84,7 +84,7 @@ class SiedleDoorbellSensor(CoordinatorEntity, BinarySensorEntity):
         """Return device information."""
         return {
             "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": "Siedle Türstation",
+            "name": f"Siedle {self._entry.data.get('endpoint_id', 'Unknown')[:8]}",
             "manufacturer": "Siedle",
             "model": self.coordinator.data.get("status", {}).get("config", {}).get("deviceType", "SUS"),
             "sw_version": self.coordinator.data.get("status", {}).get("config", {}).get("deviceVersion"),
@@ -180,7 +180,7 @@ class SiedleMQTTConnectedSensor(CoordinatorEntity, BinarySensorEntity):
         """Return device information."""
         return {
             "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": "Siedle Türstation",
+            "name": f"Siedle {self._entry.data.get('endpoint_id', 'Unknown')[:8]}",
             "manufacturer": "Siedle",
         }
 
@@ -230,7 +230,7 @@ class SiedleFCMConnectedSensor(CoordinatorEntity, BinarySensorEntity):
         """Return device information."""
         return {
             "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": "Siedle Türstation",
+            "name": f"Siedle {self._entry.data.get('endpoint_id', 'Unknown')[:8]}",
             "manufacturer": "Siedle",
         }
 
@@ -300,7 +300,7 @@ class SiedleDoorContactSensor(CoordinatorEntity, BinarySensorEntity):
         """Return device information."""
         return {
             "identifiers": {(DOMAIN, self._entry.entry_id)},
-            "name": "Siedle Türstation",
+            "name": f"Siedle {self._entry.data.get('endpoint_id', 'Unknown')[:8]}",
             "manufacturer": "Siedle",
         }
 
