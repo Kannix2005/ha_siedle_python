@@ -15,6 +15,8 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
     DOMAIN,
+    SIEDLE_DATA_DIR,
+    TASK_NAME_FCM_SETUP,
     SERVICE_OPEN_DOOR,
     SERVICE_TOGGLE_LIGHT,
     SERVICE_HANGUP,
@@ -121,7 +123,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     transfer_secret = entry.data.get("transfer_secret")
 
     # Ensure Siedle data directory exists (for tokens, cache, etc.)
-    siedle_data_dir = hass.config.path("siedle")
+    siedle_data_dir = hass.config.path(SIEDLE_DATA_DIR)
     os.makedirs(siedle_data_dir, exist_ok=True)
 
     # Migrate old token files from config root to siedle/ subfolder
@@ -171,7 +173,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         raise ConfigEntryNotReady from err
 
     # Setup data coordinator
-    coordinator = SiedleDataUpdateCoordinator(hass, siedle)
+    coordinator = SiedleDataUpdateCoordinator(hass, siedle, entry)
     await coordinator.async_config_entry_first_refresh()
 
     # Store coordinator
@@ -200,10 +202,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             
             if sip_creds:
                 # Log SIP credentials for debugging (obfuscate password)
-                _LOGGER.info(f"SIP credentials loaded: host={sip_creds.get('host')}, "
-                            f"port={sip_creds.get('port')}, "
-                            f"username={sip_creds.get('username')}, "
-                            f"protocol={sip_creds.get('protocol', 'unknown')}")
+                _LOGGER.debug(
+                    "SIP credentials loaded: host=%s, port=%s, user=%s, protocol=%s",
+                    sip_creds.get("host"),
+                    sip_creds.get("port"),
+                    sip_creds.get("username"),
+                    sip_creds.get("protocol", "unknown"),
+                )
                 siedle_sip_config = SipConfig.from_dict(sip_creds)
                 
                 # Check for external SIP configuration
@@ -220,7 +225,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                             transport=SipTransport(transport_str),
                             display_name="Siedle Türstation",
                         )
-                        _LOGGER.info(f"External SIP configured: {ext_host}")
+                        _LOGGER.debug("External SIP configured: %s", ext_host)
                 
                 # Get forwarding settings
                 forward_enabled = entry.options.get(CONF_FORWARD_ENABLED, False)
@@ -245,7 +250,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     # Ensure directory exists
                     os.makedirs(full_path, exist_ok=True)
                     recording_path = os.path.join(full_path, "doorbell")
-                    _LOGGER.info(f"Recording configured: path={recording_path}, duration={recording_duration}s")
+                    _LOGGER.debug("Recording configured: path=%s, duration=%ss", recording_path, recording_duration)
                 
                 # Create SIP Call Manager
                 sip_manager = SipCallManager(
@@ -332,7 +337,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 )
                 
         except Exception as e:
-            _LOGGER.error(f"Failed to start SIP Call Manager: {e}")
+            _LOGGER.error("Failed to start SIP Call Manager: %s", e)
             _LOGGER.exception(e)
             # Fallback to basic SIP listener
             try:
@@ -340,8 +345,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     siedle.start_sip_listener,
                     lambda event_type, data: _sip_callback(hass, entry, event_type, data)
                 )
-            except:
-                pass
+            except Exception:
+                _LOGGER.debug("Fallback legacy SIP listener also failed to start")
 
     # Setup platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -394,11 +399,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 else:
                     _LOGGER.warning("No access token available for FCM registration")
             except Exception as e:
-                _LOGGER.error(f"Failed to setup FCM handler: {e}")
-                _LOGGER.exception(e)
+                _LOGGER.exception("Failed to setup FCM handler: %s", e)
         
         # Start FCM in background - don't block setup
-        entry.async_create_background_task(hass, _start_fcm_handler(), "siedle_fcm_setup")
+        entry.async_create_background_task(hass, _start_fcm_handler(), TASK_NAME_FCM_SETUP)
 
     # ============== Setup Fritz!Box Dialer (F13) ==============
     if entry.options.get(CONF_FRITZBOX_ENABLED, False):
@@ -497,7 +501,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     files_to_remove.append(hass.config.path(f".siedle_token_{entry_id}.json"))
 
     # Token cache (new location in siedle/ subfolder)
-    siedle_data_dir = hass.config.path("siedle")
+    siedle_data_dir = hass.config.path(SIEDLE_DATA_DIR)
     files_to_remove.append(os.path.join(siedle_data_dir, f"token_{entry_id}.json"))
 
     def _cleanup_files():
@@ -645,7 +649,7 @@ def _sip_state_callback(hass: HomeAssistant, entry: ConfigEntry, state, data: di
         recording_file = data["recording_file"]
         recording_sensor = entry_data.get("last_recording_sensor")
         if recording_sensor:
-            _LOGGER.info(f"Updating recording sensor with file: {recording_file}")
+            _LOGGER.debug("Updating recording sensor with file: %s", recording_file)
             recording_sensor.update_recording(recording_file)
     
     # Fire event for automations (thread-safe)
@@ -684,7 +688,8 @@ def _fcm_callback(hass: HomeAssistant, entry: ConfigEntry, event_type: str, data
     
     # Also fire a specific doorbell event for easier automation
     if event_type == "doorbell":
-        hass.bus.fire(
+        hass.loop.call_soon_threadsafe(
+            hass.bus.async_fire,
             f"{DOMAIN}_doorbell",
             {
                 "title": data.get("title", ""),
@@ -732,10 +737,10 @@ async def async_setup_services(hass: HomeAssistant, siedle: Siedle):
 class SiedleDataUpdateCoordinator(DataUpdateCoordinator):
     """Class to manage fetching Siedle data."""
 
-    def __init__(self, hass: HomeAssistant, api: Siedle):
+    def __init__(self, hass: HomeAssistant, api: Siedle, entry: ConfigEntry):
         """Initialize."""
         self.api = api
-        self.hass = hass
+        self.entry = entry
         super().__init__(
             hass,
             _LOGGER,
@@ -746,27 +751,22 @@ class SiedleDataUpdateCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self):
         """Update data via library."""
         try:
-            # Get contacts and status
             contacts = await self.hass.async_add_executor_job(self.api.get_contacts)
             status = await self.hass.async_add_executor_job(self.api.getStatus)
-            
-            # Get SIP manager status if available
+
             sip_registered = False
             ext_sip_registered = False
             call_state = "idle"
-            
-            # Find entry for this API
-            for entry_id, data in self.hass.data.get(DOMAIN, {}).items():
-                if isinstance(data, dict) and data.get("api") == self.api:
-                    sip_manager = data.get("sip_manager")
-                    if sip_manager:
-                        if hasattr(sip_manager, '_siedle_conn') and sip_manager._siedle_conn:
-                            sip_registered = sip_manager._siedle_conn.registered
-                        if hasattr(sip_manager, '_external_conn') and sip_manager._external_conn:
-                            ext_sip_registered = sip_manager._external_conn.registered
-                        if hasattr(sip_manager, 'state'):
-                            call_state = sip_manager.state.value
-                    break
+
+            entry_data = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
+            sip_manager = entry_data.get("sip_manager")
+            if sip_manager:
+                if hasattr(sip_manager, '_siedle_conn') and sip_manager._siedle_conn:
+                    sip_registered = sip_manager._siedle_conn.registered
+                if hasattr(sip_manager, '_external_conn') and sip_manager._external_conn:
+                    ext_sip_registered = sip_manager._external_conn.registered
+                if hasattr(sip_manager, 'state'):
+                    call_state = sip_manager.state.value
             
             return {
                 "contacts": contacts,
