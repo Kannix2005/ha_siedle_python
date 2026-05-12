@@ -83,9 +83,7 @@ class Siedle:
         }
         
         if token is None and token_cache_file is None and setupInfo is None:
-            print(
-                "You need to supply a token or a cached token file or setupInfo"
-            )
+            _LOGGER.error("You need to supply a token or a cached token file or setupInfo")
         else:
             if setupInfo is None:
                 if (
@@ -753,10 +751,7 @@ class Siedle:
         
         # Enable TLS/SSL
         if mqtt_config['protocol'] == 'ssl':
-            self._mqtt_client.tls_set(
-                cert_reqs=ssl.CERT_REQUIRED,
-                tls_version=ssl.PROTOCOL_TLSv1_2
-            )
+            self._mqtt_client.tls_set(cert_reqs=ssl.CERT_REQUIRED)
         
         # Set callbacks
         self._mqtt_client.on_connect = self._on_mqtt_connect

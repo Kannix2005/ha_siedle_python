@@ -1,6 +1,6 @@
 """Button entities for Siedle integration."""
 import logging
-from homeassistant.components.button import ButtonEntity, ButtonDeviceClass
+from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
@@ -99,7 +99,6 @@ class SiedleHangupButton(SiedleButtonBase):
     
     _attr_name = "Auflegen"
     _attr_icon = "mdi:phone-hangup"
-    _attr_device_class = ButtonDeviceClass.RESTART  # Closest match for "action"
     _button_key = "hangup"
     
     def __init__(self, entry: ConfigEntry, sip_manager):
@@ -118,7 +117,7 @@ class SiedleHangupButton(SiedleButtonBase):
                 _LOGGER.debug(f"Hangup button: Call state changed to {state.value if hasattr(state, 'value') else state}")
                 # Schedule state update in HA event loop
                 if self.hass:
-                    self.hass.add_job(self.async_write_ha_state)
+                    self.hass.loop.call_soon_threadsafe(self.async_write_ha_state)
             
             self._sip_manager.set_on_call_state_change(on_state_change)
     

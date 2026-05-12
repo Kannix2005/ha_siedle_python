@@ -57,7 +57,7 @@ class SiedleFCMHandler:
         self._shared_secret = shared_secret
         self._device_name = device_name
         self._fcm_credentials_file = fcm_credentials_file or hass.config.path(
-            f".siedle_fcm_{entry_id}.json"
+            ".storage", f"siedle_fcm_{entry_id}.json"
         )
         
         self._client = None
