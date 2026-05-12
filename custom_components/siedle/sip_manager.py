@@ -1223,12 +1223,12 @@ class SipCallManager:
             
             # Check for single-character door opener code
             if len(self.dtmf_door_code) == 1 and digit == self.dtmf_door_code:
-                _LOGGER.info(f"🔓 DTMF door opener triggered! Code: '{digit}'")
+                _LOGGER.info("DTMF door opener triggered! Code: '%s'", digit)
                 self._execute_dtmf_action("open_door", digit)
             
             # Check for single-character light code
             if len(self.dtmf_light_code) == 1 and digit == self.dtmf_light_code:
-                _LOGGER.info(f"💡 DTMF light toggle triggered! Code: '{digit}'")
+                _LOGGER.info("DTMF light toggle triggered! Code: '%s'", digit)
                 self._execute_dtmf_action("toggle_light", digit)
         
         def on_dtmf_code(code: str):
@@ -1237,10 +1237,10 @@ class SipCallManager:
             
             # Check multi-digit codes
             if len(self.dtmf_door_code) > 1 and code.endswith(self.dtmf_door_code):
-                _LOGGER.info(f"🔓 DTMF door opener (multi-digit): '{code}'")
+                _LOGGER.info("DTMF door opener (multi-digit): '%s'", code)
                 self._execute_dtmf_action("open_door", code)
             elif len(self.dtmf_light_code) > 1 and code.endswith(self.dtmf_light_code):
-                _LOGGER.info(f"💡 DTMF light toggle (multi-digit): '{code}'")
+                _LOGGER.info("DTMF light toggle (multi-digit): '%s'", code)
                 self._execute_dtmf_action("toggle_light", code)
         
         self.rtp_bridge.set_dtmf_callbacks(
@@ -1311,13 +1311,14 @@ class SipCallManager:
         _LOGGER.debug(f"Siedle message: method={msg.method}, status={msg.status_code}, from={msg.from_header}")
         
         if msg.is_request and msg.method == "INVITE":
-            _LOGGER.warning(f"🔔 SIEDLE INVITE - DOORBELL! From: {msg.from_header}")
+            _LOGGER.warning("SIEDLE INVITE - DOORBELL! From: %s", msg.from_header)
             
             # Guard: If there's already an active call, clean it up first
             if self._siedle_call or self._state != CallState.IDLE:
-                _LOGGER.warning(f"⚠️ New INVITE while previous call active! state={self._state.value}, "
-                              f"siedle_call={'yes (call_id=' + self._siedle_call.call_id + ')' if self._siedle_call else 'no'}, "
-                              f"external_call={'yes' if self._external_call else 'no'}")
+                _LOGGER.warning("New INVITE while previous call active! state=%s, siedle_call=%s, external_call=%s",
+                              self._state.value,
+                              'yes (call_id=' + self._siedle_call.call_id + ')' if self._siedle_call else 'no',
+                              'yes' if self._external_call else 'no')
                 _LOGGER.warning("Cleaning up previous call before processing new INVITE...")
                 self._end_call()
             
@@ -1771,7 +1772,7 @@ class SipCallManager:
                             from .srtp_handler import SRTPCrypto
                             srtp_crypto = SRTPCrypto.from_base64(crypto_line)
                             if srtp_crypto:
-                                _LOGGER.info("✓ SRTP crypto initialized successfully")
+                                _LOGGER.info("SRTP crypto initialized successfully")
                             else:
                                 _LOGGER.error("Failed to initialize SRTP crypto")
                         except ImportError as e:
@@ -1974,12 +1975,12 @@ class SipCallManager:
                         from .srtp_handler import SRTPCrypto
                         srtp_decrypt = SRTPCrypto.from_base64(crypto_line)
                         if srtp_decrypt:
-                            _LOGGER.info("✓ SRTP decrypt context created (Siedle's key)")
-                        
+                            _LOGGER.info("SRTP decrypt context created (Siedle's key)")
+
                         # Generate our own key for encryption
                         our_crypto_line, srtp_encrypt = SRTPCrypto.generate_sdp_crypto_line()
                         if srtp_encrypt:
-                            _LOGGER.info("✓ SRTP encrypt context created (our key)")
+                            _LOGGER.info("SRTP encrypt context created (our key)")
                     except Exception as e:
                         _LOGGER.error(f"Failed to setup SRTP crypto: {e}")
         

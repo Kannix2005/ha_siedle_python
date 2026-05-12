@@ -485,7 +485,7 @@ class SiedleFCMHandler:
                 self._last_call_id = call_id
                 self._last_call_time = datetime.now()
                 
-                _LOGGER.info(f"🔔 DOORBELL RING DETECTED! Call ID: {call_id}")
+                _LOGGER.info("DOORBELL RING DETECTED! Call ID: %s", call_id)
                 
                 # Fire doorbell event
                 self._fire_event("doorbell", {
