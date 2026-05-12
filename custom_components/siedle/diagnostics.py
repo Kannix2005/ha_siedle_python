@@ -124,8 +124,9 @@ async def async_get_config_entry_diagnostics(
         }
     
     # Call History
-    call_history = entry_data.get("call_history", [])
-    
+    call_history_sensor = entry_data.get("call_history_sensor")
+    call_history = call_history_sensor.get_history() if call_history_sensor else []
+
     return {
         "config_entry": {
             "data": async_redact_data(dict(entry.data), TO_REDACT_DATA),
@@ -137,5 +138,5 @@ async def async_get_config_entry_diagnostics(
         "fcm": fcm_info,
         "coordinator": coordinator_data,
         "call_history_count": len(call_history),
-        "call_history_last_5": list(call_history)[-5:] if call_history else [],
+        "call_history_last_5": call_history[-5:] if call_history else [],
     }

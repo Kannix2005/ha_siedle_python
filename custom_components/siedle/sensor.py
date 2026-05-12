@@ -49,13 +49,13 @@ async def async_setup_entry(
         entities.append(SiedleCallStatusSensor(entry, sip_manager, hass))
     
     # Add last recording sensor
-    entities.append(SiedleLastRecordingSensor(entry, hass))
-    
+    last_recording_sensor = SiedleLastRecordingSensor(entry, hass)
+    entities.append(last_recording_sensor)
+    data["last_recording_sensor"] = last_recording_sensor
+
     # Add call history sensor (F4)
     call_history_sensor = SiedleCallHistorySensor(entry, hass)
     entities.append(call_history_sensor)
-    
-    # Store reference for updates from __init__.py
     data["call_history_sensor"] = call_history_sensor
 
     async_add_entities(entities)
@@ -249,7 +249,7 @@ class SiedleCallStatusSensor(SiedleSensorBase):
         self._call_info = data
         # Schedule state update in HA event loop (thread-safe)
         if self._hass:
-            self._hass.add_job(self.async_write_ha_state)
+            self._hass.loop.call_soon_threadsafe(self.async_write_ha_state)
     
     @property
     def native_value(self) -> str:
@@ -315,7 +315,7 @@ class SiedleLastRecordingSensor(SiedleSensorBase):
         self._last_recording_time = datetime.now()
         # Schedule state update in HA event loop (thread-safe)
         if self._hass:
-            self._hass.add_job(self.async_write_ha_state)
+            self._hass.loop.call_soon_threadsafe(self.async_write_ha_state)
     
     @property
     def native_value(self):
@@ -375,7 +375,7 @@ class SiedleCallHistorySensor(SiedleSensorBase):
         }
         self._current_call["_start_time"] = datetime.now()
         if self._hass:
-            self._hass.add_job(self.async_write_ha_state)
+            self._hass.loop.call_soon_threadsafe(self.async_write_ha_state)
     
     def call_answered(self, data: dict[str, Any] | None = None) -> None:
         """Mark current call as answered."""
@@ -384,7 +384,7 @@ class SiedleCallHistorySensor(SiedleSensorBase):
             if data and "recording_file" in data:
                 self._current_call["recording_file"] = data["recording_file"]
             if self._hass:
-                self._hass.add_job(self.async_write_ha_state)
+                self._hass.loop.call_soon_threadsafe(self.async_write_ha_state)
     
     def call_ended(self, data: dict[str, Any] | None = None) -> None:
         """Record end of current call."""
@@ -403,7 +403,7 @@ class SiedleCallHistorySensor(SiedleSensorBase):
             self._current_call = None
             
             if self._hass:
-                self._hass.add_job(self.async_write_ha_state)
+                self._hass.loop.call_soon_threadsafe(self.async_write_ha_state)
     
     @property
     def native_value(self) -> int:

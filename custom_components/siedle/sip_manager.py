@@ -229,6 +229,9 @@ class SipConnection:
         self._external_ip: Optional[str] = None
         self._external_port: Optional[int] = None
         
+        # RFC 3261: to_tag must be consistent across all responses to the same INVITE dialog
+        self._dialog_to_tags: dict[str, str] = {}
+
         # Keepalive / re-registration
         self._last_recv_time: float = 0.0
         self._last_register_time: float = 0.0
@@ -494,9 +497,17 @@ class SipConnection:
         Record-Route headers must also be copied for dialog-establishing responses.
         """
         local_ip = self._get_local_ip()
-        to_tag = uuid.uuid4().hex[:8]
         transport_str = self.config.transport_str
-        
+
+        # RFC 3261 §8.2.6.2: To tag must be consistent across all responses for the same dialog.
+        # Reuse the same tag for 1xx and 2xx responses to the same Call-ID.
+        call_id = request.call_id
+        if call_id not in self._dialog_to_tags:
+            if len(self._dialog_to_tags) > 200:
+                self._dialog_to_tags.clear()
+            self._dialog_to_tags[call_id] = uuid.uuid4().hex[:8]
+        to_tag = self._dialog_to_tags[call_id]
+
         # Build To header with tag for 200 OK
         to_header = request.to_header
         if status_code == 200 and ";tag=" not in to_header:

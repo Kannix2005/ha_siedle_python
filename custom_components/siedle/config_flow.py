@@ -1,5 +1,6 @@
 """Config flow for Siedle integration."""
 import logging
+import secrets
 import voluptuous as vol
 import json
 
@@ -71,7 +72,6 @@ class SiedleFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Siedle."""
 
     VERSION = 1
-    CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_PUSH
 
     def __init__(self):
         """Initialize the config flow."""
@@ -82,25 +82,29 @@ class SiedleFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         # Ensure that the QR views are registered
         from . import SiedleQRCallbackView, SiedleQRScannerView
         try:
-            registered_names = {
-                getattr(r, 'name', None) for r in self.hass.http.app.router._resources
-            }
-            if "api:siedle:qr_callback" not in registered_names:
-                _LOGGER.info("Registering Siedle QR callback view")
-                self.hass.http.register_view(SiedleQRCallbackView())
-            if "api:siedle:qr_scanner" not in registered_names:
-                _LOGGER.info("Registering Siedle QR scanner view")
-                self.hass.http.register_view(SiedleQRScannerView())
-        except Exception as e:
-            _LOGGER.error("Error registering view: %s", e)
-        
+            self.hass.http.register_view(SiedleQRCallbackView())
+        except ValueError:
+            pass  # already registered by async_setup
+        try:
+            self.hass.http.register_view(SiedleQRScannerView())
+        except ValueError:
+            pass  # already registered by async_setup
+
+        # Generate a one-time nonce to prevent CSRF on the unauthenticated callback endpoint.
+        # Works over HTTP: the nonce is only visible to the browser that loaded the scanner page.
+        nonce = secrets.token_urlsafe(16)
+        self.hass.data.setdefault("siedle_flow_nonces", {})[self.flow_id] = nonce
+
         # Build URL for QR scanner page (served by HA itself)
         external = self.hass.config.external_url
         internal = self.hass.config.internal_url
         base_url = external or internal or "http://homeassistant.local:8123"
 
         flow_id = self.flow_id
-        qr_scanner_url = f"{base_url}/api/siedle/qr_scanner?config_flow_id={flow_id}"
+        qr_scanner_url = (
+            f"{base_url}/api/siedle/qr_scanner"
+            f"?config_flow_id={flow_id}&nonce={nonce}"
+        )
 
         return self.async_external_step(
             step_id="qr_scan",
@@ -108,18 +112,13 @@ class SiedleFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_qr_scan(self, user_input=None):
-        """Handle the QR scan step - waiting for external callback."""
-        _LOGGER.debug(f"async_step_qr_scan called with user_input: {user_input}")
-        
-        if user_input is None:
-            # Still waiting for callback
-            return self.async_external_step_done(next_step_id="qr_scan")
+        """Handle the QR scan step - called by callback after user scanned QR code."""
+        _LOGGER.debug("async_step_qr_scan called with user_input keys: %s", list(user_input.keys()) if user_input else None)
 
-        # Callback received - mark external step as done and move to processing
+        # Callback received — mark external step as done and move to processing
         _LOGGER.info("QR data received via callback")
-        self._setup_data = user_input.get("result")
-        
-        # External step must be marked as done before transitioning to regular step
+        self._setup_data = user_input.get("result") if user_input else None
+
         return self.async_external_step_done(next_step_id="process_qr")
 
     async def async_step_process_qr(self, user_input=None):
@@ -134,7 +133,7 @@ class SiedleFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_abort(reason="invalid_qr")
 
             setup_info = json.loads(qr_data)
-            _LOGGER.debug(f"Parsed setup_info: {setup_info.keys()}")
+            _LOGGER.debug("Parsed setup_info keys: %s", list(setup_info.keys()))
 
             # Validate required fields
             if "susUrl" not in setup_info or (
@@ -157,7 +156,9 @@ class SiedleFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     _LOGGER.error("Siedle authorization failed - no endpoint_id received")
                     return self.async_abort(reason="cannot_connect")
                 
-                _LOGGER.info(f"Successfully created entry for endpoint {siedle._endpoint_id}")
+                _LOGGER.info("Successfully created entry for endpoint %s", siedle._endpoint_id)
+                await self.async_set_unique_id(siedle._endpoint_id)
+                self._abort_if_unique_id_configured()
                 return self.async_create_entry(
                     title=f"Siedle {siedle._endpoint_id[:8]}",
                     data={

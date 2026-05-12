@@ -96,18 +96,16 @@ async def async_setup(hass: HomeAssistant, config: dict):
     hass.data.setdefault(DOMAIN, {})
     
     # Register QR callback and scanner API endpoints only once
-    registered_names = {getattr(r, 'name', None) for r in hass.http.app.router._resources}
-    
-    if "api:siedle:qr_callback" not in registered_names:
-        _LOGGER.info("Registering Siedle QR callback view at /api/siedle/qr_callback")
+    try:
         hass.http.register_view(SiedleQRCallbackView())
-    else:
+        _LOGGER.info("Registered Siedle QR callback view at /api/siedle/qr_callback")
+    except ValueError:
         _LOGGER.debug("Siedle QR callback view already registered")
-    
-    if "api:siedle:qr_scanner" not in registered_names:
-        _LOGGER.info("Registering Siedle QR scanner view at /api/siedle/qr_scanner")
+
+    try:
         hass.http.register_view(SiedleQRScannerView())
-    else:
+        _LOGGER.info("Registered Siedle QR scanner view at /api/siedle/qr_scanner")
+    except ValueError:
         _LOGGER.debug("Siedle QR scanner view already registered")
     
     return True
@@ -135,6 +133,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             _LOGGER.info("Migrated token file to siedle/ subfolder")
         except OSError as e:
             _LOGGER.warning("Could not migrate token file: %s", e)
+
+    # Migrate old FCM credentials from config root to .storage/
+    old_fcm_path = hass.config.path(f".siedle_fcm_{entry.entry_id}.json")
+    new_fcm_path = hass.config.path(".storage", f"siedle_fcm_{entry.entry_id}.json")
+    if os.path.exists(old_fcm_path) and not os.path.exists(new_fcm_path):
+        try:
+            os.rename(old_fcm_path, new_fcm_path)
+            _LOGGER.info("Migrated FCM credentials to .storage/")
+        except OSError as e:
+            _LOGGER.warning("Could not migrate FCM credentials: %s", e)
 
     # Initialize Siedle API
     try:
@@ -245,11 +253,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 if recording_enabled:
                     base_path = entry.options.get(CONF_RECORDING_PATH, DEFAULT_RECORDING_PATH)
                     recording_duration = entry.options.get(CONF_RECORDING_DURATION, DEFAULT_RECORDING_DURATION)
-                    # Build full path
-                    full_path = hass.config.path(base_path, "doorbell")
-                    # Ensure directory exists
-                    os.makedirs(full_path, exist_ok=True)
-                    recording_path = os.path.join(full_path, "doorbell")
+                    recording_path = hass.config.path(base_path, "doorbell")
+                    os.makedirs(recording_path, exist_ok=True)
                     _LOGGER.debug("Recording configured: path=%s, duration=%ss", recording_path, recording_duration)
                 
                 # Create SIP Call Manager
@@ -391,7 +396,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     started = await fcm_handler.async_start()
                     if started:
                         hass.data[DOMAIN][entry.entry_id]["fcm_handler"] = fcm_handler
-                        _LOGGER.info("✅ FCM doorbell detection started successfully!")
+                        _LOGGER.info("FCM doorbell detection started successfully")
                         # Notify sensors immediately that FCM is now connected
                         async_dispatcher_send(hass, SIGNAL_SIEDLE_CONNECTION_UPDATE)
                     else:
@@ -494,8 +499,10 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     entry_id = entry.entry_id
     files_to_remove = []
 
-    # FCM credentials (old location in config root)
+    # FCM credentials (old location in config root — clean up legacy file)
     files_to_remove.append(hass.config.path(f".siedle_fcm_{entry_id}.json"))
+    # FCM credentials (new location in .storage/)
+    files_to_remove.append(hass.config.path(".storage", f"siedle_fcm_{entry_id}.json"))
 
     # Token cache (old location in config root)
     files_to_remove.append(hass.config.path(f".siedle_token_{entry_id}.json"))
@@ -556,7 +563,7 @@ def _mqtt_callback(hass: HomeAssistant, entry: ConfigEntry, topic: str, payload:
 
 def _sip_callback(hass: HomeAssistant, entry: ConfigEntry, event_type: str, data: dict):
     """Handle SIP doorbell events (called from SIP thread) - THIS IS THE MAIN DOORBELL DETECTION!"""
-    _LOGGER.info("🔔 SIP DOORBELL event: type=%s, data=%s", event_type, data)
+    _LOGGER.info("SIP DOORBELL event: type=%s, data=%s", event_type, data)
     
     # Fire event for automations (thread-safe)
     hass.loop.call_soon_threadsafe(
@@ -591,7 +598,7 @@ def _sip_doorbell_callback(hass: HomeAssistant, entry: ConfigEntry, data: dict,
     Handle doorbell events from new SIP Call Manager.
     This callback is called when an INVITE is received from Siedle (doorbell ring).
     """
-    _LOGGER.info("🔔🔔🔔 DOORBELL! From: %s", data.get("from", "unknown"))
+    _LOGGER.info("DOORBELL ring from: %s", data.get("from", "unknown"))
     
     # Update call history sensor (F4)
     entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
@@ -663,40 +670,6 @@ def _sip_state_callback(hass: HomeAssistant, entry: ConfigEntry, state, data: di
         },
     )
 
-
-def _fcm_callback(hass: HomeAssistant, entry: ConfigEntry, event_type: str, data: dict):
-    """Handle FCM push notifications (called from FCM thread)."""
-    _LOGGER.info("FCM event: type=%s, data=%s", event_type, data)
-    
-    # Thread-safe: schedule on event loop
-    hass.loop.call_soon_threadsafe(
-        async_dispatcher_send, hass, SIGNAL_SIEDLE_CONNECTION_UPDATE
-    )
-    
-    # Fire event for automations (thread-safe)
-    hass.loop.call_soon_threadsafe(
-        hass.bus.async_fire,
-        f"{DOMAIN}_event",
-        {
-            "type": "fcm",
-            "event_type": event_type,
-            "title": data.get("title", ""),
-            "body": data.get("body", ""),
-            "entry_id": entry.entry_id,
-        },
-    )
-    
-    # Also fire a specific doorbell event for easier automation
-    if event_type == "doorbell":
-        hass.loop.call_soon_threadsafe(
-            hass.bus.async_fire,
-            f"{DOMAIN}_doorbell",
-            {
-                "title": data.get("title", ""),
-                "body": data.get("body", ""),
-                "entry_id": entry.entry_id,
-            },
-        )
 
 
 async def async_setup_services(hass: HomeAssistant, siedle: Siedle):
@@ -927,6 +900,7 @@ QR_SCANNER_HTML = """<!DOCTYPE html>
     <script>
         var configFlowId = "%%CONFIG_FLOW_ID%%";
         var callbackUrl = "%%CALLBACK_URL%%";
+        var flowNonce = "%%NONCE%%";
         var statusDiv = document.getElementById('status');
         var retryBtn = document.getElementById('retry-btn');
         var manualSection = document.getElementById('manual-section');
@@ -971,7 +945,7 @@ QR_SCANNER_HTML = """<!DOCTYPE html>
                 return;
             }
             var encodedResult = encodeURIComponent(qrInput);
-            var redirectUrl = callbackUrl + '?config_flow_id=' + configFlowId + '&result=' + encodedResult;
+            var redirectUrl = callbackUrl + '?config_flow_id=' + configFlowId + '&nonce=' + flowNonce + '&result=' + encodedResult;
             document.getElementById('submit-manual').disabled = true;
             document.getElementById('submit-manual').textContent = 'Weiterleitung...';
             window.location.href = redirectUrl;
@@ -994,7 +968,7 @@ QR_SCANNER_HTML = """<!DOCTYPE html>
                 if (callbackUrl && configFlowId) {
                     updateStatus('&#x1F504; Weiterleitung zu Home Assistant...', 'info', true);
                     var encodedResult = encodeURIComponent(decodedText);
-                    var redirectUrl = callbackUrl + '?config_flow_id=' + configFlowId + '&result=' + encodedResult;
+                    var redirectUrl = callbackUrl + '?config_flow_id=' + configFlowId + '&nonce=' + flowNonce + '&result=' + encodedResult;
                     setTimeout(function() { window.location.href = redirectUrl; }, 1000);
                 } else {
                     updateStatus('&#x274C; Fehlende Parameter: callback_url oder config_flow_id', 'error');
@@ -1092,6 +1066,7 @@ class SiedleQRScannerView(HomeAssistantView):
         from aiohttp import web
 
         config_flow_id = request.query.get("config_flow_id", "")
+        nonce = request.query.get("nonce", "")
         callback_url = request.query.get("callback_url", "")
 
         # If callback_url not provided as parameter, derive from request
@@ -1102,10 +1077,11 @@ class SiedleQRScannerView(HomeAssistantView):
             _LOGGER.debug("Derived callback_url from request: %s", callback_url)
 
         try:
-            html_content = QR_SCANNER_HTML.replace(
-                "%%CONFIG_FLOW_ID%%", config_flow_id
-            ).replace(
-                "%%CALLBACK_URL%%", callback_url
+            html_content = (
+                QR_SCANNER_HTML
+                .replace("%%CONFIG_FLOW_ID%%", config_flow_id)
+                .replace("%%CALLBACK_URL%%", callback_url)
+                .replace("%%NONCE%%", nonce)
             )
             return web.Response(text=html_content, content_type="text/html")
         except Exception as err:
@@ -1123,22 +1099,27 @@ class SiedleQRCallbackView(HomeAssistantView):
     async def get(self, request):
         """Handle GET request from QR scanner redirect."""
         from aiohttp import web
-        
-        # Get parameters
+
         config_flow_id = request.query.get("config_flow_id")
+        nonce = request.query.get("nonce")
         result = request.query.get("result")
 
-        if not config_flow_id or not result:
-            return web.Response(
-                text="Missing parameters. Please try again.",
-                status=400
-            )
+        if not config_flow_id or not result or not nonce:
+            return web.Response(text="Missing parameters. Please try again.", status=400)
 
-        # Get the config flow manager
         hass = request.app["hass"]
-        
+
+        # Validate one-time nonce to prevent CSRF on this unauthenticated endpoint
+        expected_nonce = hass.data.get("siedle_flow_nonces", {}).get(config_flow_id)
+        if not expected_nonce or expected_nonce != nonce:
+            _LOGGER.warning("QR callback rejected: invalid or expired nonce for flow %s", config_flow_id)
+            return web.Response(text="Invalid or expired token. Please restart the setup.", status=403)
+
+        # Consume the nonce (one-time use)
+        hass.data.get("siedle_flow_nonces", {}).pop(config_flow_id, None)
+
         try:
-            # Continue the flow with the QR data - external step erwartet user_input
+            # Continue the flow with the QR data
             await hass.config_entries.flow.async_configure(
                 flow_id=config_flow_id,
                 user_input={"result": result}
