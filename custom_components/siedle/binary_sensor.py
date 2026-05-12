@@ -54,7 +54,7 @@ class SiedleDoorbellSensor(CoordinatorEntity, BinarySensorEntity):
     and turns "on" briefly when a doorbell ring is detected.
     """
 
-    _attr_device_class = BinarySensorDeviceClass.OCCUPANCY  # or SOUND
+    _attr_device_class = BinarySensorDeviceClass.SOUND
     _attr_has_entity_name = True
     
     def __init__(self, coordinator, entry, hass: HomeAssistant):
@@ -68,15 +68,15 @@ class SiedleDoorbellSensor(CoordinatorEntity, BinarySensorEntity):
         self._is_on = False
         self._last_ring = None
         self._unsub_timer = None
-        
-        # Register callbacks for FCM and MQTT events
-        self._hass.bus.async_listen(
-            f"{DOMAIN}_doorbell",
-            self._handle_doorbell_event
+
+    async def async_added_to_hass(self) -> None:
+        """Register event listeners when entity is added."""
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            self._hass.bus.async_listen(f"{DOMAIN}_doorbell", self._handle_doorbell_event)
         )
-        self._hass.bus.async_listen(
-            f"{DOMAIN}_event",
-            self._handle_siedle_event
+        self.async_on_remove(
+            self._hass.bus.async_listen(f"{DOMAIN}_event", self._handle_siedle_event)
         )
 
     @property

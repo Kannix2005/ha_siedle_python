@@ -3,7 +3,7 @@
   "name": "Siedle Door Intercom",
   "codeowners": ["@Kannix2005"],
   "config_flow": true,
-  "dependencies": ["http"],
+  "dependencies": ["http", "media_source"],
   "documentation": "https://github.com/Kannix2005/ha_siedle_python",
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/Kannix2005/ha_siedle_python/issues",
@@ -15,5 +15,5 @@
     "cryptography>=41.0.0",
     "aiohttp>=3.8.0"
   ],
-  "version": "3.0.0"
+  "version": "3.0.5"
 }
