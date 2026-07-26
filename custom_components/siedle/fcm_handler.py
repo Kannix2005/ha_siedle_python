@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import threading
+import time
 from datetime import datetime
 from typing import Callable, Optional, Dict, Any
 
@@ -296,16 +297,40 @@ class SiedleFCMHandler:
             "gcm_sender_id": SIEDLE_FIREBASE["sender_id"],
         }
         
-        gcm_token = send_gcm_register_request(
-            android_id=android_id,
-            security_token=security_token,
-            app_id=SIEDLE_FIREBASE["app_id"],
-            android_app=android_app,
-            installation_auth_token=installation_token,
-        )
-        _LOGGER.info(f"GCM Register OK: token={gcm_token[:30]}...")
-        
-        return android_id, security_token, gcm_token
+        # Google's GCM register frequently returns a transient
+        # PHONE_REGISTRATION_ERROR right after check-in because the freshly
+        # minted android_id needs a few seconds to propagate on Google's
+        # backend. The official push_receiver/firebase-messaging clients retry
+        # this call; upstream fcm_receiver does not, so we retry here.
+        # Runs in an executor thread (via async_add_executor_job), so the
+        # blocking sleep does not stall the event loop.
+        max_attempts = 5
+        retry_delay = 5
+        last_err = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                gcm_token = send_gcm_register_request(
+                    android_id=android_id,
+                    security_token=security_token,
+                    app_id=SIEDLE_FIREBASE["app_id"],
+                    android_app=android_app,
+                    installation_auth_token=installation_token,
+                )
+                _LOGGER.info(f"GCM Register OK: token={gcm_token[:30]}...")
+                return android_id, security_token, gcm_token
+            except RuntimeError as e:
+                last_err = e
+                if "PHONE_REGISTRATION_ERROR" in str(e) and attempt < max_attempts:
+                    _LOGGER.warning(
+                        "GCM register attempt %d/%d failed (%s); retrying in %ds...",
+                        attempt, max_attempts, e, retry_delay,
+                    )
+                    time.sleep(retry_delay)
+                    continue
+                raise
+
+        # Should not be reachable (loop either returns or raises), but be safe.
+        raise last_err
     
     def _encrypt_name(self, name: str) -> Optional[str]:
         """Encrypt device name using AES/CBC with shared secret.
