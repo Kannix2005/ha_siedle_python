@@ -1,4 +1,5 @@
 """The Siedle integration."""
+import json
 import asyncio
 import logging
 import os
@@ -898,9 +899,9 @@ QR_SCANNER_HTML = """<!DOCTYPE html>
     </div>
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
     <script>
-        var configFlowId = "%%CONFIG_FLOW_ID%%";
-        var callbackUrl = "%%CALLBACK_URL%%";
-        var flowNonce = "%%NONCE%%";
+        var configFlowId = %%CONFIG_FLOW_ID%%;
+        var callbackUrl = %%CALLBACK_URL%%;
+        var flowNonce = %%NONCE%%;
         var statusDiv = document.getElementById('status');
         var retryBtn = document.getElementById('retry-btn');
         var manualSection = document.getElementById('manual-section');
@@ -1054,6 +1055,22 @@ QR_SCANNER_HTML = """<!DOCTYPE html>
 </html>"""
 
 
+def _js_literal(value: str) -> str:
+    """Render a value as a safe JavaScript string literal.
+
+    The scanner page is served unauthenticated and embeds request data into
+    inline JavaScript. json.dumps handles quotes and backslashes; the angle
+    brackets and ampersand are escaped as well so a payload cannot close the
+    surrounding <script> element.
+    """
+    return (
+        json.dumps(str(value))
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+
+
 class SiedleQRScannerView(HomeAssistantView):
     """Serve the QR code scanner page directly from Home Assistant."""
 
@@ -1067,21 +1084,20 @@ class SiedleQRScannerView(HomeAssistantView):
 
         config_flow_id = request.query.get("config_flow_id", "")
         nonce = request.query.get("nonce", "")
-        callback_url = request.query.get("callback_url", "")
 
-        # If callback_url not provided as parameter, derive from request
-        if not callback_url:
-            scheme = request.headers.get("X-Forwarded-Proto", request.url.scheme)
-            host = request.headers.get("X-Forwarded-Host", request.host)
-            callback_url = f"{scheme}://{host}/api/siedle/qr_callback"
-            _LOGGER.debug("Derived callback_url from request: %s", callback_url)
+        # The callback URL is always derived from the request. Taking it from
+        # a query parameter (as before) let a crafted link aim this page at a
+        # foreign host — and this view is served without authentication.
+        scheme = request.headers.get("X-Forwarded-Proto", request.url.scheme)
+        host = request.headers.get("X-Forwarded-Host", request.host)
+        callback_url = f"{scheme}://{host}/api/siedle/qr_callback"
 
         try:
             html_content = (
                 QR_SCANNER_HTML
-                .replace("%%CONFIG_FLOW_ID%%", config_flow_id)
-                .replace("%%CALLBACK_URL%%", callback_url)
-                .replace("%%NONCE%%", nonce)
+                .replace("%%CONFIG_FLOW_ID%%", _js_literal(config_flow_id))
+                .replace("%%CALLBACK_URL%%", _js_literal(callback_url))
+                .replace("%%NONCE%%", _js_literal(nonce))
             )
             return web.Response(text=html_content, content_type="text/html")
         except Exception as err:

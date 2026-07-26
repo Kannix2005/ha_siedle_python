@@ -28,7 +28,13 @@ class SRTPCrypto:
         self.master_key = master_key
         self.master_salt = master_salt
         self._session_keys = {}
-        
+        # Rollover counter per SSRC, keeps the CTR keystream unique past the
+        # 16-bit sequence wrap.
+        self._roc_state: dict = {}
+        # Integrity checking is enforced from the first tag that verifies.
+        self._auth_verified_once = False
+        self._auth_warned = False
+
         _LOGGER.debug(f"SRTP initialized: key={len(master_key)} bytes, salt={len(master_salt)} bytes")
     
     @classmethod
@@ -153,6 +159,35 @@ class SRTPCrypto:
         
         return keys
     
+    def _build_iv(self, session_salt: bytes, header: bytes, ssrc: int,
+                  sequence: int) -> bytes:
+        """Build the AES-CTR IV, including a rollover counter.
+
+        The 16-bit sequence number alone repeats after ~21 minutes of speech,
+        and with it the CTR keystream — the classic two-time-pad problem. The
+        rollover counter is mixed in so each packet keeps a unique counter
+        block. It is XORed in, so for the first rollover period (ROC == 0) the
+        IV is bit-for-bit what this implementation produced before, which
+        keeps existing peers interoperable.
+        """
+        state = self._roc_state.setdefault(ssrc, {"roc": 0, "last_seq": sequence})
+        if sequence < state["last_seq"] and state["last_seq"] - sequence > 32768:
+            state["roc"] = (state["roc"] + 1) & 0xFFFFFFFF
+        state["last_seq"] = sequence
+
+        iv = bytearray(16)
+        iv[0:14] = session_salt
+        iv[4:8] = header[8:12]  # SSRC
+        iv[14:16] = header[2:4]  # Sequence
+
+        roc = state["roc"]
+        if roc:
+            roc_bytes = struct.pack("!I", roc)
+            for i in range(4):
+                iv[10 + i] ^= roc_bytes[i]
+
+        return bytes(iv)
+
     def decrypt_rtp(self, packet: bytes) -> Optional[bytes]:
         """Decrypt an SRTP packet to RTP.
         
@@ -191,24 +226,36 @@ class SRTPCrypto:
             # Extract auth tag (last 10 bytes for HMAC-SHA1-80)
             auth_tag = packet[-10:]
             srtp_packet = packet[:-10]  # Everything except auth tag
-            
-            # Verify authentication (optional but recommended)
-            # For now, skip verification and just decrypt
-            
+
+            # Verify the HMAC. This used to be skipped entirely, which left
+            # SRTP without any integrity protection — anyone able to reach the
+            # RTP port could inject audio without knowing the key.
+            expected_tag = hmac.new(
+                session_auth_key, srtp_packet, hashlib.sha1
+            ).digest()[:10]
+            if hmac.compare_digest(expected_tag, auth_tag):
+                self._auth_verified_once = True
+            elif self._auth_verified_once:
+                # We know this peer's tags normally verify, so this packet is
+                # forged or corrupted.
+                _LOGGER.warning("SRTP: dropping packet with invalid auth tag")
+                return None
+            elif not self._auth_warned:
+                # Never saw a valid tag yet: the peer may compute the tag over
+                # a different input. Don't break working audio over it, but say
+                # so loudly once — integrity is not enforced in this state.
+                self._auth_warned = True
+                _LOGGER.warning(
+                    "SRTP: auth tag does not verify; continuing without integrity "
+                    "checking until a valid tag is seen"
+                )
+
             # Extract encrypted payload
             encrypted_payload = srtp_packet[header_len:]
-            
-            # Build IV for decryption
-            # IV = session_salt XOR (SSRC || packet_index)
+
             sequence = struct.unpack("!H", header[2:4])[0]
-            timestamp = struct.unpack("!I", header[4:8])[0]
-            
-            # Simplified: Use SSRC and sequence as IV
-            iv = bytearray(16)
-            iv[0:14] = session_salt
-            iv[4:8] = header[8:12]  # SSRC
-            iv[14:16] = header[2:4]  # Sequence
-            
+            iv = self._build_iv(session_salt, header, ssrc, sequence)
+
             # Decrypt using AES-CTR
             cipher = Cipher(
                 algorithms.AES(session_key),
@@ -256,13 +303,10 @@ class SRTPCrypto:
             # Extract payload
             payload = packet[header_len:]
             
-            # Build IV for encryption (same as decrypt — AES-CTR with SSRC + sequence)
+            # Build IV for encryption (same construction as decrypt)
             sequence = struct.unpack("!H", header[2:4])[0]
-            iv = bytearray(16)
-            iv[0:14] = session_salt
-            iv[4:8] = header[8:12]   # SSRC
-            iv[14:16] = header[2:4]  # Sequence
-            
+            iv = self._build_iv(session_salt, header, ssrc, sequence)
+
             # Encrypt using AES-CTR
             cipher = Cipher(
                 algorithms.AES(session_key),

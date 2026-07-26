@@ -1024,6 +1024,10 @@ class SipCallManager:
         
         # Active calls
         self._siedle_call: Optional[SipCall] = None
+        # Call-IDs of doorbell INVITEs already handled, with the time they were
+        # seen. SIP retransmits INVITEs and proxies fork them, so without this
+        # a single doorbell press produced one forwarded call per copy.
+        self._handled_call_ids: Dict[str, float] = {}
         self._external_call: Optional[SipCall] = None
         
         # State
@@ -1306,13 +1310,48 @@ class SipCallManager:
             except Exception as e:
                 _LOGGER.error(f"Call state callback error: {e}")
     
+    # A doorbell press keeps producing INVITE copies for a while: UDP
+    # retransmissions run for ~32s, and proxies may fork the call.
+    DUPLICATE_INVITE_WINDOW = 60.0
+
+    def _is_duplicate_invite(self, call_id: str) -> bool:
+        """Return True if this INVITE belongs to a doorbell we already handled."""
+        now = time.time()
+        # Drop entries that are older than any retransmission could be
+        for old_id, seen in list(self._handled_call_ids.items()):
+            if now - seen > self.DUPLICATE_INVITE_WINDOW:
+                del self._handled_call_ids[old_id]
+
+        if call_id in self._handled_call_ids:
+            self._handled_call_ids[call_id] = now
+            return True
+
+        self._handled_call_ids[call_id] = now
+        return False
+
     def _handle_siedle_message(self, msg: SipMessage):
         """Handle message from Siedle SIP server."""
         _LOGGER.debug(f"Siedle message: method={msg.method}, status={msg.status_code}, from={msg.from_header}")
         
         if msg.is_request and msg.method == "INVITE":
             _LOGGER.warning("SIEDLE INVITE - DOORBELL! From: %s", msg.from_header)
-            
+
+            # A repeat of an INVITE we already handled is a retransmission or a
+            # forked copy, not a second doorbell press. Acknowledge it so the
+            # sender stops repeating, but do not ring anyone a second time.
+            if msg.call_id and self._is_duplicate_invite(msg.call_id):
+                _LOGGER.info(
+                    "Duplicate INVITE for call-id %s — answering without re-processing",
+                    msg.call_id,
+                )
+                try:
+                    self._siedle_conn.send(
+                        self._siedle_conn.create_response(msg, 100, "Trying")
+                    )
+                except Exception as e:
+                    _LOGGER.debug("Could not answer duplicate INVITE: %s", e)
+                return
+
             # Guard: If there's already an active call, clean it up first
             if self._siedle_call or self._state != CallState.IDLE:
                 _LOGGER.warning("New INVITE while previous call active! state=%s, siedle_call=%s, external_call=%s",
@@ -2108,7 +2147,19 @@ class SipCallManager:
                 except Exception as e:
                     _LOGGER.warning(f"Failed to send BYE to external: {e}")
             elif self._external_call.state in (CallState.RINGING_IN, CallState.RINGING_OUT):
-                _LOGGER.info(f"External call in {self._external_call.state.value} — not sending BYE (not connected)")
+                # BYE is wrong before the call is answered — it has to be
+                # CANCEL. Sending nothing at all left the target phone ringing,
+                # so every repeated doorbell INVITE piled up another ringing
+                # call instead of replacing the previous one.
+                try:
+                    cancel_msg = self._build_cancel_for_invite()
+                    if cancel_msg:
+                        self._external_conn.send(cancel_msg)
+                        _LOGGER.info("CANCEL sent to external (call was still ringing)")
+                    else:
+                        _LOGGER.debug("No CANCEL built for ringing external call")
+                except Exception as e:
+                    _LOGGER.warning(f"Failed to CANCEL external call: {e}")
         
         # Stop RTP bridge and clean up for reuse
         if self.rtp_bridge:

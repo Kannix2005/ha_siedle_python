@@ -629,7 +629,9 @@ class RtpBridge:
         # Remote endpoints
         self._remote_a: Optional[Tuple[str, int]] = None
         self._remote_b: Optional[Tuple[str, int]] = None
-        
+        # Counters for packets rejected because they came from a foreign host
+        self._foreign_src_dropped: dict = {}
+
         # Local ports
         self.local_port_a: int = 0
         self.local_port_b: int = 0
@@ -724,6 +726,27 @@ class RtpBridge:
         if crypto:
             _LOGGER.info("SRTP encrypt context set (us→Siedle)")
     
+    def _is_expected_source(self, addr, remote, direction: str) -> bool:
+        """Check that an RTP packet came from the negotiated peer.
+
+        Only the address is compared, not the port: peers behind NAT legally
+        send from a different source port than the one signalled. Without any
+        check at all, every host able to reach this port could inject audio
+        into a running door call.
+        """
+        if not remote or not addr:
+            return True  # peer not known yet — nothing to compare against
+        if addr[0] == remote[0]:
+            return True
+        dropped = self._foreign_src_dropped.get(direction, 0) + 1
+        self._foreign_src_dropped[direction] = dropped
+        if dropped == 1 or dropped % 500 == 0:
+            _LOGGER.warning(
+                "RTP %s: dropped %d packet(s) from unexpected source %s (expected %s)",
+                direction, dropped, addr[0], remote[0],
+            )
+        return False
+
     def set_remote_b(self, remote: Tuple[str, int]):
         """Update remote B endpoint after initial setup.
         
@@ -1029,6 +1052,8 @@ class RtpBridge:
         while self._running:
             try:
                 data, addr = self._socket_a.recvfrom(2048)
+                if data and not self._is_expected_source(addr, self._remote_a, "A->B"):
+                    continue
                 if data:
                     # Log first few packets for debugging
                     if packet_count < 5:
@@ -1106,6 +1131,8 @@ class RtpBridge:
         while self._running:
             try:
                 data, addr = self._socket_b.recvfrom(2048)
+                if data and not self._is_expected_source(addr, self._remote_b, "B->A"):
+                    continue
                 if data:
                     packet = RtpPacket.parse(data)
                     if packet:
