@@ -34,7 +34,9 @@ hangup_call:
 
 call_door:
   name: Call Door Station
-  description: Initiate a call to the door station (intercom)
+  description: >-
+    Start a call to the door station without waiting for a doorbell press.
+    EXPERIMENTAL and audio only - this integration has no video path yet.
   fields:
     contact_id:
       name: Contact ID

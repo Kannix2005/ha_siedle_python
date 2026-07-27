@@ -1028,6 +1028,8 @@ class SipCallManager:
         # seen. SIP retransmits INVITEs and proxies fork them, so without this
         # a single doorbell press produced one forwarded call per copy.
         self._handled_call_ids: Dict[str, float] = {}
+        # True while a call we placed ourselves (call_door) is in progress.
+        self._door_call_outgoing = False
         self._external_call: Optional[SipCall] = None
         
         # State
@@ -1469,6 +1471,20 @@ class SipCallManager:
         elif not msg.is_request:
             # Log all SIP responses (100, 180, 183, etc.)
             _LOGGER.debug(f"Siedle: SIP response {msg.status_code} {msg.status_text}")
+
+            # Responses to a door call we placed ourselves (call_door service).
+            if self._door_call_outgoing and self._siedle_call:
+                if msg.status_code in (180, 183):
+                    _LOGGER.info("Door call: ringing")
+                elif msg.status_code == 200:
+                    _LOGGER.info("Door call: 200 OK — door station answered")
+                    self._handle_door_call_answered(msg)
+                elif msg.status_code and msg.status_code >= 400:
+                    _LOGGER.warning(
+                        "Door call rejected: %s %s", msg.status_code, msg.status_text
+                    )
+                    self._door_call_outgoing = False
+                    self._end_call()
     
     def _handle_external_message(self, msg: SipMessage):
         """Handle message from external SIP server."""
@@ -1737,6 +1753,87 @@ class SipCallManager:
         # Send INVITE to first target
         self._forward_to_external_target(target)
     
+    def call_door(self, target_number: str) -> bool:
+        """Call the door station without waiting for a doorbell press.
+
+        The official app can open a live connection to the door at any time;
+        this places the same outgoing INVITE over the Siedle connection. Once
+        the door answers, the audio is bridged to the configured forwarding
+        target, so the flow from there on is the same as for a doorbell call.
+
+        EXPERIMENTAL: audio only — this integration has no video path yet.
+        """
+        if not self._siedle_conn or not self._siedle_conn.registered:
+            raise RuntimeError("Not registered with the Siedle SIP server")
+        if self._state != CallState.IDLE or self._siedle_call:
+            raise RuntimeError(f"A call is already in progress (state {self._state.value})")
+        if not target_number:
+            raise RuntimeError("No door call number known")
+
+        local_port_a, local_port_b = self.rtp_bridge.setup(None, None)
+        sdp_ip = self._siedle_conn._get_local_ip()
+        session_id = str(int(time.time()))
+        sdp = (
+            f"v=0\r\n"
+            f"o=- {session_id} {session_id} IN IP4 {sdp_ip}\r\n"
+            f"s=Siedle Door Call\r\n"
+            f"c=IN IP4 {sdp_ip}\r\n"
+            f"t=0 0\r\n"
+            f"m=audio {local_port_a} RTP/AVP 8 0 101\r\n"
+            f"a=rtpmap:8 PCMA/8000\r\n"
+            f"a=rtpmap:0 PCMU/8000\r\n"
+            f"a=rtpmap:101 telephone-event/8000\r\n"
+            f"a=fmtp:101 0-16\r\n"
+            f"a=ptime:20\r\n"
+            f"a=sendrecv\r\n"
+        )
+
+        to_uri = f"sip:{target_number}@{self._siedle_conn.config.host}"
+        invite_msg, call = self._siedle_conn.create_invite(
+            to_uri, local_port_a, sdp_override=sdp
+        )
+        self._siedle_call = call
+        self._door_call_outgoing = True
+        self._cached_local_rtp_port_b = local_port_b
+        self._siedle_conn.send(invite_msg)
+
+        self._set_state(CallState.RINGING_OUT, {"target": target_number, "door_call": True})
+        _LOGGER.info("Door call INVITE sent to %s (RTP %s:%s)", to_uri, sdp_ip, local_port_a)
+        return True
+
+    def _handle_door_call_answered(self, msg: SipMessage) -> None:
+        """The door station accepted our outgoing call."""
+        call = self._siedle_call
+        if not call:
+            return
+
+        call.to_tag = self._extract_tag(msg.to_header)
+        call.state = CallState.CONNECTED
+        call.remote_rtp_port = msg.get_sdp_media_port() or 0
+        call.remote_rtp_host = msg.get_sdp_connection_ip()
+
+        try:
+            ack = self._siedle_conn.create_ack(call, msg)
+            self._siedle_conn.send(ack)
+        except Exception as e:
+            _LOGGER.error("Door call: failed to ACK 200 OK: %s", e)
+            return
+
+        if call.remote_rtp_host and call.remote_rtp_port:
+            self.rtp_bridge.set_remote_a((call.remote_rtp_host, call.remote_rtp_port))
+            if not self.rtp_bridge._running:
+                self.rtp_bridge.start()
+            _LOGGER.info(
+                "Door call connected, RTP %s:%s", call.remote_rtp_host, call.remote_rtp_port
+            )
+
+        self._set_state(CallState.CONNECTED, {"door_call": True})
+
+        # Ring the configured phone so someone can actually talk to the door.
+        if (self.forward_to_number and self._external_conn
+                and self._external_conn.registered):
+            self._forward_to_external()
+
     def _forward_to_external_target(self, target_number: str):
         """Send INVITE to a specific external target (supports F2 sequential forwarding)."""
         sdp_ip_b = getattr(self, '_cached_sdp_ip_b', self._external_conn._get_local_ip())
@@ -2120,6 +2217,7 @@ class SipCallManager:
     def _end_call(self):
         """End active call on both sides and fully clean up for next call."""
         _LOGGER.info(f"Ending call... (state={self._state}, siedle_call={'yes' if self._siedle_call else 'no'}, external_call={'yes' if self._external_call else 'no'})")
+        self._door_call_outgoing = False
         
         # F1: Cancel forward timeout timer
         self._cancel_forward_timeout()

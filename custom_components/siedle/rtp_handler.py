@@ -747,6 +747,15 @@ class RtpBridge:
             )
         return False
 
+    def set_remote_a(self, remote: Tuple[str, int]):
+        """Set the Siedle-side RTP endpoint.
+
+        Needed for outgoing door calls, where the door's RTP address only
+        arrives with its 200 OK instead of with the initial INVITE.
+        """
+        self._remote_a = remote
+        _LOGGER.info(f"RTP bridge remote_a set to {remote}")
+
     def set_remote_b(self, remote: Tuple[str, int]):
         """Update remote B endpoint after initial setup.
         

@@ -21,6 +21,7 @@ from .const import (
     SERVICE_OPEN_DOOR,
     SERVICE_TOGGLE_LIGHT,
     SERVICE_HANGUP,
+    SERVICE_CALL_DOOR,
     ATTR_CONTACT_ID,
     CONF_EXT_SIP_ENABLED,
     CONF_EXT_SIP_HOST,
@@ -492,6 +493,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
         
         hass.data[DOMAIN].pop(entry.entry_id)
 
+        # With the last entry gone the services have nothing left to act on.
+        if not any(isinstance(d, dict) for d in hass.data.get(DOMAIN, {}).values()):
+            async_unload_services(hass)
+
     return unload_ok
 
 
@@ -673,22 +678,100 @@ def _sip_state_callback(hass: HomeAssistant, entry: ConfigEntry, state, data: di
 
 
 
+def _iter_apis(hass: HomeAssistant):
+    """Yield every loaded Siedle API instance."""
+    for data in hass.data.get(DOMAIN, {}).values():
+        if isinstance(data, dict) and data.get("api") is not None:
+            yield data["api"]
+
+
+def _resolve_api(hass: HomeAssistant, contact_id):
+    """Pick the API instance that owns *contact_id*.
+
+    Services used to close over the instance of whichever entry registered
+    them last, so with two door stations a service call could silently act on
+    the wrong one.
+    """
+    apis = list(_iter_apis(hass))
+    if not apis:
+        raise HomeAssistantError("No Siedle integration is loaded")
+    if contact_id:
+        for api in apis:
+            try:
+                if any(c.get("id") == contact_id for c in api.get_contacts(None)):
+                    return api
+            except Exception:  # noqa: BLE001 - fall through to the default
+                continue
+    return apis[0]
+
+
 async def async_setup_services(hass: HomeAssistant, siedle: Siedle):
     """Setup Siedle services."""
     async def handle_open_door(call):
         """Handle open door service call."""
         contact_id = call.data.get(ATTR_CONTACT_ID)
-        await hass.async_add_executor_job(siedle.openDoor, contact_id)
+        api = _resolve_api(hass, contact_id)
+        try:
+            await hass.async_add_executor_job(api.openDoor, contact_id)
+        except Exception as err:
+            raise HomeAssistantError(f"Could not open the door: {err}") from err
 
     async def handle_toggle_light(call):
         """Handle toggle light service call."""
         contact_id = call.data.get(ATTR_CONTACT_ID)
-        await hass.async_add_executor_job(siedle.turnOnLight, contact_id)
-    
+        api = _resolve_api(hass, contact_id)
+        try:
+            await hass.async_add_executor_job(api.turnOnLight, contact_id)
+        except Exception as err:
+            raise HomeAssistantError(f"Could not switch the door light: {err}") from err
+
     async def handle_activate_endpoint(call):
         """Handle activate endpoint service call."""
         _LOGGER.info("Endpoint activation requested - press the doorbell button now!")
-        await hass.async_add_executor_job(siedle.activate_endpoint)
+        api = _resolve_api(hass, None)
+        try:
+            await hass.async_add_executor_job(api.activate_endpoint)
+        except Exception as err:
+            raise HomeAssistantError(f"Could not activate the endpoint: {err}") from err
+
+    async def handle_call_door(call):
+        """Call the door station without a preceding doorbell press."""
+        contact_id = call.data.get(ATTR_CONTACT_ID)
+        api = _resolve_api(hass, contact_id)
+
+        # Find the door contact and its call number
+        try:
+            doors = await hass.async_add_executor_job(api.get_contacts)
+        except Exception as err:
+            raise HomeAssistantError(f"Could not read door contacts: {err}") from err
+
+        door = None
+        for contact in doors or []:
+            if contact_id and contact.get("id") != contact_id:
+                continue
+            if (contact.get("phone") or {}).get("callNumber"):
+                door = contact
+                break
+        if door is None:
+            raise HomeAssistantError(
+                "No callable door station found"
+                + (f" for contact {contact_id}" if contact_id else "")
+            )
+
+        call_number = door["phone"]["callNumber"]
+
+        sip_manager = None
+        for data in hass.data.get(DOMAIN, {}).values():
+            if isinstance(data, dict) and data.get("api") is api:
+                sip_manager = data.get("sip_manager")
+                break
+        if sip_manager is None:
+            raise HomeAssistantError("SIP is not enabled for this Siedle entry")
+
+        try:
+            await hass.async_add_executor_job(sip_manager.call_door, call_number)
+        except Exception as err:
+            raise HomeAssistantError(f"Could not call the door station: {err}") from err
 
     async def handle_hangup(call):
         """Handle hangup call service."""
@@ -706,6 +789,24 @@ async def async_setup_services(hass: HomeAssistant, siedle: Siedle):
     hass.services.async_register(DOMAIN, SERVICE_TOGGLE_LIGHT, handle_toggle_light)
     hass.services.async_register(DOMAIN, "activate_endpoint", handle_activate_endpoint)
     hass.services.async_register(DOMAIN, SERVICE_HANGUP, handle_hangup)
+    hass.services.async_register(DOMAIN, SERVICE_CALL_DOOR, handle_call_door)
+
+
+def async_unload_services(hass: HomeAssistant) -> None:
+    """Remove the services once the last entry is gone.
+
+    Leaving them registered kept handlers alive that point at an unloaded
+    entry, so calling them failed with a confusing error instead of simply
+    not existing.
+    """
+    for service in (
+        SERVICE_OPEN_DOOR,
+        SERVICE_TOGGLE_LIGHT,
+        "activate_endpoint",
+        SERVICE_HANGUP,
+        SERVICE_CALL_DOOR,
+    ):
+        hass.services.async_remove(DOMAIN, service)
 
 
 class SiedleDataUpdateCoordinator(DataUpdateCoordinator):

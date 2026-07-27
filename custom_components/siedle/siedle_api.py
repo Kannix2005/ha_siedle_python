@@ -937,7 +937,17 @@ class Siedle:
             
             # Save credentials
             if credentials_file:
-                with open(credentials_file, 'w') as f:
+                # 0600 like the current FCM handler does — these credentials
+                # allow impersonating the push registration, so they must not
+                # be world-readable via the default umask.
+                with os.fdopen(
+                    os.open(
+                        credentials_file,
+                        os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                        0o600,
+                    ),
+                    "w",
+                ) as f:
                     json.dump(credentials, f)
                 _LOGGER.info(f"Saved FCM credentials to {credentials_file}")
             

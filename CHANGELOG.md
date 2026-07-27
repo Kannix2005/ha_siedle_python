@@ -5,7 +5,23 @@ Alle wichtigen Änderungen an diesem Projekt werden hier dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
-## [WIP] - XXXX-XX-XX
+## [3.1.0] - 2026-07-27
+
+### Sicherheit
+- **XSS in der QR-Scanner-Seite behoben**: Der Endpunkt `/api/siedle/qr_scanner` wird ohne Authentifizierung ausgeliefert und schrieb Query-Parameter ungeprüft in eingebettetes JavaScript. Ein präparierter Link konnte damit Skript im Origin von Home Assistant ausführen — also Session bzw. Token stehlen und darüber auch die Haustür öffnen. Werte werden jetzt escaped eingesetzt, und die Callback-URL wird immer aus dem Request abgeleitet statt aus einem Parameter übernommen.
+- **SRTP prüft die Integrität**: Der empfangene HMAC wurde nie verifiziert („For now, skip verification"), und die RTP-Weiterleitung nahm Pakete beliebiger Absender an. Wer den Medien-Port erreichte, konnte ohne Schlüssel Audio in ein laufendes Türgespräch einspielen. Auth-Tags werden jetzt geprüft — scharf ab dem ersten gültigen Tag, damit eine abweichende Gegenstelle nicht stillschweigend die Audioverbindung verliert — und Pakete fremder Absender verworfen.
+- **Kein Keystream-Reuse mehr**: Der AES-CTR-IV nutzte nur die 16-Bit-Sequenznummer und wiederholte sich nach etwa 21 Gesprächsminuten. Ein Rollover-Zähler fließt jetzt ein; in der ersten Rollover-Periode bleibt der IV unverändert, damit Gegenstellen kompatibel bleiben.
+- Legacy-FCM-Zugangsdaten werden mit `0600` statt mit der Standard-Umask geschrieben, und Diagnose-Dumps schwärzen die Rufnummern der Weiterleitung.
+
+### Behoben
+- **Ein Klingeln löste bis zu zehn Anrufe aus** (#17): Wiederholte INVITEs — SIP sendet sie über UDP mehrfach, Proxys forken zusätzlich — galten jeweils als neues Klingeln, und ein bereits klingelnder weitergeleiteter Anruf wurde nie abgebrochen, sondern nur protokolliert. INVITEs werden jetzt über die Call-ID dedupliziert, und noch nicht angenommene Anrufe erhalten ein CANCEL.
+- **FCM stirbt nicht mehr still** (#12): Der Listener-Thread konnte enden oder hängen bleiben, während der Status weiter „connected" meldete — Abhilfe war bisher nur, FCM manuell aus- und wieder einzuschalten. Ein Watchdog verbindet jetzt automatisch neu (mit Backoff), und `is_connected` meldet keine Verbindung mehr, deren Listener-Thread nicht läuft.
+- **Token-Refresh überlastet die Siedle-API nicht mehr** (#11): Coordinator und Tastendrücke teilen sich eine Instanz und konnten den OAuth-Client gleichzeitig neu aufbauen. Der Refresh ist jetzt serialisiert und rate-limitiert; ein endgültig abgelehnter Grant wird gemerkt statt endlos wiederholt, und Home Assistant fragt über `ConfigEntryAuthFailed` nach einer neuen Anmeldung.
+- **Dienste wirken auf die richtige Anlage**: `open_door` und `toggle_light` waren global registriert und zeigten auf die zuletzt geladene Konfiguration — bei zwei Türstationen öffnete sich damit unbemerkt die falsche Tür. Dienste lösen die passende Instanz jetzt über die Kontakt-ID auf, melden Fehler als `HomeAssistantError` statt als rohen Traceback und werden beim Entladen wieder abgemeldet.
+- FCM-Registrierung wiederholt einen transienten `PHONE_REGISTRATION_ERROR` (danke an @arnoudkooi, #16) — ohne diesen Retry blieb FCM dauerhaft deaktiviert.
+
+### Hinzugefügt
+- **`call_door`-Dienst** (#18): startet ein Gespräch zur Türstation, ohne dass vorher geklingelt wurde. Der Dienst war seit dem ersten Commit als Platzhalter angelegt, aber nie implementiert. **Experimentell und nur Audio** — einen Video-Pfad hat die Integration bisher nicht.
 
 - Updated integration icons
 

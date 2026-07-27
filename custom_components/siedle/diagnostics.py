@@ -10,6 +10,8 @@ from homeassistant.helpers.redact import async_redact_data
 from .const import DOMAIN
 
 # Sensitive fields to redact
+REDACTED = "**REDACTED**"
+
 TO_REDACT_DATA = {
     "shared_secret",
     "token",
@@ -51,8 +53,10 @@ async def async_get_config_entry_diagnostics(
             "available": True,
             "state": sip_manager.state.value,
             "is_call_active": sip_manager.is_call_active,
-            "forward_to_number": sip_manager.forward_to_number,
-            "forward_from_number": sip_manager.forward_from_number,
+            # Diagnostics dumps regularly get pasted into public issues —
+            # keep private phone numbers out of them.
+            "forward_to_number": REDACTED if sip_manager.forward_to_number else None,
+            "forward_from_number": REDACTED if sip_manager.forward_from_number else None,
             "auto_answer": sip_manager.auto_answer,
             "recording_enabled": sip_manager.recording_enabled,
         }
