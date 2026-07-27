@@ -44,6 +44,15 @@ _LOGGER = logging.getLogger(__name__)
 
 BASE_URL = "https://sus2.siedle.com/sus2"
 
+# Shortest gap between two token refreshes. Anything faster is a second thread
+# reacting to the same expiry, not a genuine need for a new token.
+TOKEN_REFRESH_MIN_INTERVAL = 30
+
+
+class SiedleAuthError(Exception):
+    """Raised when Siedle rejects the stored credentials for good."""
+
+
 OAUTH_URL = BASE_URL + "/oauth/token"
 REFRESH_URL = OAUTH_URL
 ENDPOINT_URL = "/api/endpoint/v1/endpoint"
@@ -64,6 +73,13 @@ class Siedle:
         self._token_cache_file = token_cache_file
         self._cache_ttl = cache_ttl
         self._cache = {}
+        # Token refresh is shared between the coordinator and button presses;
+        # without serialization both could refresh at once.
+        self._token_lock = threading.Lock()
+        self._last_refresh = 0.0
+        # Set once Siedle rejects the grant itself — further automatic retries
+        # are pointless and only add load.
+        self.auth_invalid = False
         self._deviceId = None
         self._client_id = "app"
         self._client: OAuth2Session = None
@@ -283,14 +299,44 @@ class Siedle:
         self._load_contacts()
     
     def refreshToken(self):
-        """Refresh OAuth token"""
-        self._client = OAuth2Session(
-            self._client_id, 
-            token=self._token, 
-            auto_refresh_url=REFRESH_URL,
-            auto_refresh_kwargs=self._extra, 
-            token_updater=self._tokenSaver
-        )
+        """Rebuild the OAuth session so the next request refreshes the token.
+
+        Serialized and rate limited: the coordinator polls every few minutes
+        and button presses share this instance, so an expired token used to
+        let several threads rebuild the client at once and hammer Siedle's
+        token endpoint — the likely path into "max retries exceeded".
+        """
+        with self._token_lock:
+            if self.auth_invalid:
+                raise SiedleAuthError(
+                    "Siedle rejected the refresh token — re-authentication required"
+                )
+
+            now = time.time()
+            if now - self._last_refresh < TOKEN_REFRESH_MIN_INTERVAL:
+                # Another thread just refreshed; reuse the client it built.
+                _LOGGER.debug("Skipping token refresh, one just happened")
+                return
+            self._last_refresh = now
+
+            self._client = OAuth2Session(
+                self._client_id,
+                token=self._token,
+                auto_refresh_url=REFRESH_URL,
+                auto_refresh_kwargs=self._extra,
+                token_updater=self._tokenSaver,
+            )
+
+    def _note_auth_failure(self, err: Exception) -> None:
+        """Remember a dead grant instead of retrying it forever."""
+        text = str(err).lower()
+        if "invalid_grant" in text or "invalid_token" in text:
+            if not self.auth_invalid:
+                _LOGGER.error(
+                    "Siedle rejected the refresh token (%s). Stopping automatic "
+                    "retries — the integration must be re-authenticated.", err,
+                )
+            self.auth_invalid = True
 
     def _generate_signature(self, action: str, contact_id: str, timestamp: str = None) -> dict:
         """
@@ -379,10 +425,14 @@ class Siedle:
         except requests.HTTPError as e:
             _LOGGER.error("HTTP Error Siedle API: %s", e)
             if e.response is not None and e.response.status_code == 401:
-                self.refreshToken()
-                response = self._client.get(url, timeout=30)
-                response.raise_for_status()
-                return response.json()
+                try:
+                    self.refreshToken()
+                    response = self._client.get(url, timeout=30)
+                    response.raise_for_status()
+                    return response.json()
+                except Exception as refresh_err:
+                    self._note_auth_failure(refresh_err)
+                    raise
         except requests.exceptions.RequestException as e:
             _LOGGER.error("Error Siedle API: %s" % e)
             raise
@@ -405,11 +455,15 @@ class Siedle:
         except requests.HTTPError as e:
             _LOGGER.error("HTTP Error Siedle API: %s", e)
             if e.response is not None and e.response.status_code == 401:
-                self.refreshToken()
-                _LOGGER.debug("Retrying POST with refreshed token")
-                response = self._client.post(url, json=data, timeout=30)
-                response.raise_for_status()
-                return response.json() if response.text else {}
+                try:
+                    self.refreshToken()
+                    _LOGGER.debug("Retrying POST with refreshed token")
+                    response = self._client.post(url, json=data, timeout=30)
+                    response.raise_for_status()
+                    return response.json() if response.text else {}
+                except Exception as refresh_err:
+                    self._note_auth_failure(refresh_err)
+                    raise
         except requests.exceptions.RequestException as e:
             _LOGGER.error("Error Siedle API: %s with data: %s" % (e, data))
             raise
@@ -432,10 +486,14 @@ class Siedle:
         except requests.HTTPError as e:
             _LOGGER.error("HTTP Error Siedle API: %s", e)
             if e.response is not None and e.response.status_code == 401:
-                self.refreshToken()
-                response = self._client.put(url, json=data, timeout=30)
-                response.raise_for_status()
-                return response.json() if response.text else {}
+                try:
+                    self.refreshToken()
+                    response = self._client.put(url, json=data, timeout=30)
+                    response.raise_for_status()
+                    return response.json() if response.text else {}
+                except Exception as refresh_err:
+                    self._note_auth_failure(refresh_err)
+                    raise
         except requests.exceptions.RequestException as e:
             _LOGGER.error("Error Siedle API: %s", e)
             raise

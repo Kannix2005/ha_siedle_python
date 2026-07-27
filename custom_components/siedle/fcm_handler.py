@@ -20,6 +20,13 @@ from .const import DOMAIN, SIGNAL_SIEDLE_CONNECTION_UPDATE
 
 _LOGGER = logging.getLogger(__name__)
 
+# Watchdog timings. The check itself is cheap; the stale timeout is generous
+# because an idle FCM connection is normal — it only has to be short enough
+# that a doorbell press is not missed for a whole day.
+FCM_WATCHDOG_INTERVAL = 120
+FCM_STALE_TIMEOUT = 1800
+FCM_RECONNECT_MAX_DELAY = 900
+
 SIEDLE_FIREBASE = {
     "project_id": "siedle-sus-android",
     "api_key": "AIzaSyDBeZC0fOq0b3WHZBUzvU2FM5nrLgglFQw",
@@ -67,13 +74,24 @@ class SiedleFCMHandler:
         self._connected = False
         self._thread = None
         self._stop_event = threading.Event()
-        
+
+        # Watchdog: the FCM connection can die silently — the listener thread
+        # ends, or the client stops delivering while still claiming to be
+        # connected. Without this, users had to toggle FCM off and on by hand.
+        self._watchdog_unsub = None
+        self._last_activity = 0.0
+        self._reconnect_failures = 0
+
         # Last call info for deduplication
         self._last_call_id = None
         self._last_call_time = None
     
     @property
     def is_connected(self) -> bool:
+        # A dead listener thread means nothing can arrive, no matter what the
+        # last status callback claimed — don't report a connection that isn't.
+        if self._running and (self._thread is None or not self._thread.is_alive()):
+            return False
         """Return True if FCM connection is active."""
         return self._connected
     
@@ -140,14 +158,78 @@ class SiedleFCMHandler:
         self._thread.start()
         _LOGGER.debug("FCM listener thread started: %s", self._thread.name)
         
+        self._last_activity = time.time()
+        self._schedule_watchdog()
+
         _LOGGER.info("Siedle FCM handler started")
         return True
-    
-    async def async_stop(self):
-        """Stop the FCM listener."""
+
+    def _schedule_watchdog(self, delay: Optional[float] = None) -> None:
+        """Arm the next watchdog check."""
+        self._cancel_watchdog()
+        self._watchdog_unsub = async_call_later(
+            self._hass,
+            FCM_WATCHDOG_INTERVAL if delay is None else delay,
+            self._async_watchdog,
+        )
+
+    def _cancel_watchdog(self) -> None:
+        if self._watchdog_unsub is not None:
+            self._watchdog_unsub()
+            self._watchdog_unsub = None
+
+    async def _async_watchdog(self, _now=None) -> None:
+        """Reconnect when the listener died or went quiet."""
+        self._watchdog_unsub = None
         if not self._running:
             return
-        
+
+        thread_dead = self._thread is None or not self._thread.is_alive()
+        idle_for = time.time() - self._last_activity
+        stale = idle_for > FCM_STALE_TIMEOUT
+
+        if not (thread_dead or stale):
+            self._reconnect_failures = 0
+            self._schedule_watchdog()
+            return
+
+        reason = (
+            "listener thread is gone"
+            if thread_dead
+            else f"no FCM traffic for {int(idle_for)}s"
+        )
+        _LOGGER.warning("FCM watchdog: %s — reconnecting", reason)
+
+        try:
+            await self.async_stop()
+            started = await self.async_start()
+        except Exception as err:  # noqa: BLE001 - must never kill the watchdog
+            _LOGGER.error("FCM watchdog: reconnect failed: %s", err)
+            started = False
+
+        if started:
+            self._reconnect_failures = 0
+            return  # async_start armed the watchdog again
+
+        # Back off so a permanently unreachable service is not hammered.
+        self._reconnect_failures += 1
+        self._running = True  # keep the watchdog alive for the next attempt
+        delay = min(
+            FCM_WATCHDOG_INTERVAL * (2 ** min(self._reconnect_failures, 5)),
+            FCM_RECONNECT_MAX_DELAY,
+        )
+        _LOGGER.warning(
+            "FCM watchdog: reconnect attempt %d failed, retrying in %ds",
+            self._reconnect_failures, delay,
+        )
+        self._schedule_watchdog(delay)
+
+    async def async_stop(self):
+        """Stop the FCM listener."""
+        self._cancel_watchdog()
+        if not self._running:
+            return
+
         _LOGGER.info("Stopping Siedle FCM handler...")
         self._running = False
         self._stop_event.set()
@@ -447,7 +529,8 @@ class SiedleFCMHandler:
     def _on_connection_status(self, status: str, client_id: str):
         """Handle FCM connection status changes."""
         _LOGGER.debug(f"FCM connection status: {status}")
-        
+        self._last_activity = time.time()
+
         was_connected = self._connected
         self._connected = (status == "connected")
         
@@ -467,11 +550,13 @@ class SiedleFCMHandler:
     
     def _on_notification(self, message: dict, client_id: str):
         """Handle FCM notification message."""
+        self._last_activity = time.time()
         _LOGGER.debug("FCM notification received: %s", list(message.keys()) if isinstance(message, dict) else type(message).__name__)
         self._process_message(message)
 
     def _on_data_message(self, data: bytes, client_id: str):
         """Handle FCM data message."""
+        self._last_activity = time.time()
         _LOGGER.debug("FCM data message received (%d bytes)", len(data) if data else 0)
         try:
             message = json.loads(data.decode())

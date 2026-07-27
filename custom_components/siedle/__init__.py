@@ -8,7 +8,7 @@ from datetime import timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.components.http import HomeAssistantView
 import homeassistant.helpers.config_validation as cv
@@ -724,6 +724,12 @@ class SiedleDataUpdateCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self):
         """Update data via library."""
+        if getattr(self.api, "auth_invalid", False):
+            # Siedle rejected the grant itself. Polling on regardless only
+            # piles more requests onto an endpoint that will keep saying no.
+            raise ConfigEntryAuthFailed(
+                "Siedle rejected the stored credentials — please re-authenticate"
+            )
         try:
             contacts = await self.hass.async_add_executor_job(self.api.get_contacts)
             status = await self.hass.async_add_executor_job(self.api.getStatus)
