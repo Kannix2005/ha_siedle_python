@@ -81,6 +81,7 @@ class SiedleFCMHandler:
         self._watchdog_unsub = None
         self._last_activity = 0.0
         self._reconnect_failures = 0
+        self._saw_disconnected = False
 
         # Last call info for deduplication
         self._last_call_id = None
@@ -88,11 +89,12 @@ class SiedleFCMHandler:
     
     @property
     def is_connected(self) -> bool:
-        # A dead listener thread means nothing can arrive, no matter what the
-        # last status callback claimed — don't report a connection that isn't.
-        if self._running and (self._thread is None or not self._thread.is_alive()):
-            return False
-        """Return True if FCM connection is active."""
+        """Return True if FCM connection is active.
+
+        Do NOT infer this from our listener thread: start_listening() returns
+        as soon as the library has taken over in its own thread, so our thread
+        finishing is the normal case, not a failure.
+        """
         return self._connected
     
     @property
@@ -184,18 +186,26 @@ class SiedleFCMHandler:
         if not self._running:
             return
 
-        thread_dead = self._thread is None or not self._thread.is_alive()
+        # Liveness comes from the library's own status callback and from the
+        # traffic we see — never from our listener thread, which finishes as
+        # soon as the library takes over internally.
         idle_for = time.time() - self._last_activity
         stale = idle_for > FCM_STALE_TIMEOUT
+        # One isolated "disconnected" is normal around startup or a brief
+        # network blip; only a state that survives two checks counts.
+        disconnected = not self._connected
+        persistent_disconnect = disconnected and self._saw_disconnected
 
-        if not (thread_dead or stale):
+        self._saw_disconnected = disconnected
+
+        if not (persistent_disconnect or stale):
             self._reconnect_failures = 0
             self._schedule_watchdog()
             return
 
         reason = (
-            "listener thread is gone"
-            if thread_dead
+            f"still disconnected after {int(FCM_WATCHDOG_INTERVAL)}s"
+            if persistent_disconnect
             else f"no FCM traffic for {int(idle_for)}s"
         )
         _LOGGER.warning("FCM watchdog: %s — reconnecting", reason)
