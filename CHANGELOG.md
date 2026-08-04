@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden hier dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [3.1.1] - 2026-08-04
+
+### Behoben
+- **Der FCM-Watchdog riss gesunde Verbindungen ab.** Er wertete 30 Minuten ohne FCM-Verkehr als Fehler — bei einer Türklingel ist genau das der Normalzustand. In der Praxis verband er sich dadurch mehrmals pro Nacht grundlos neu (im Log: „no FCM traffic for 1800s — reconnecting"). Maßgeblich ist jetzt der Verbindungsstatus der Bibliothek; Funkstille löst erst nach 24 Stunden eine Selbstheilung aus, für den Fall eines hängenden Listeners, der sich weiterhin als verbunden meldet.
+- **Neuregistrierung des Push-Tokens scheiterte mit `401 invalid_token`.** Der FCM-Handler benutzte den Zugriffstoken, den er beim Setup bekommen hatte; Siedle rotiert ihn aber. Bei jedem Reconnect schlug die Registrierung deshalb fehl und hinterließ „doorbell detection may not work". Der Token wird jetzt zum Aufrufzeitpunkt frisch aus der API gelesen.
+
 ## [3.1.0] - 2026-07-27
 
 ### Sicherheit

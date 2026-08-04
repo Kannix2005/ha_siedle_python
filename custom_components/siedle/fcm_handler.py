@@ -20,11 +20,18 @@ from .const import DOMAIN, SIGNAL_SIEDLE_CONNECTION_UPDATE
 
 _LOGGER = logging.getLogger(__name__)
 
-# Watchdog timings. The check itself is cheap; the stale timeout is generous
-# because an idle FCM connection is normal — it only has to be short enough
-# that a doorbell press is not missed for a whole day.
+# Watchdog timings.
+#
+# The real fault signal is the library's connection status, not silence: a
+# doorbell nobody rings produces no FCM traffic for hours, which is perfectly
+# healthy. A 30 minute silence timeout therefore tore down working connections
+# several times a night, and every reconnect re-registers the push token with
+# Siedle — needless load, and a chance to end up unregistered.
+#
+# Silence is kept only as a last-resort self-heal for a listener that hangs
+# while still claiming to be connected. Once a day is enough for that.
 FCM_WATCHDOG_INTERVAL = 120
-FCM_STALE_TIMEOUT = 1800
+FCM_STALE_TIMEOUT = 86400
 FCM_RECONNECT_MAX_DELAY = 900
 
 SIEDLE_FIREBASE = {
@@ -57,11 +64,17 @@ class SiedleFCMHandler:
         shared_secret: Optional[bytes] = None,
         device_name: str = "Home Assistant",
         fcm_credentials_file: Optional[str] = None,
+        token_provider: Optional[Callable[[], Optional[str]]] = None,
     ):
         """Initialize the FCM handler."""
         self._hass = hass
         self._entry_id = entry_id
         self._access_token = access_token
+        # Siedle rotates the OAuth access token, so the copy handed in at setup
+        # goes stale. Re-registering with it failed with 401 invalid_token and
+        # left the push registration broken. The provider fetches the current
+        # token at call time instead.
+        self._token_provider = token_provider
         self._shared_secret = shared_secret
         self._device_name = device_name
         self._fcm_credentials_file = fcm_credentials_file or hass.config.path(
@@ -474,7 +487,7 @@ class SiedleFCMHandler:
             return False
         
         headers = {
-            "Authorization": f"Bearer {self._access_token}",
+            "Authorization": f"Bearer {self._current_access_token()}",
             "Content-Type": "application/json",
         }
         
@@ -664,6 +677,20 @@ class SiedleFCMHandler:
             event_data,
         )
     
+    def _current_access_token(self) -> Optional[str]:
+        """Return the token that is valid right now."""
+        if self._token_provider is not None:
+            try:
+                token = self._token_provider()
+                if token:
+                    if token != self._access_token:
+                        _LOGGER.debug("FCM: using refreshed Siedle access token")
+                        self._access_token = token
+                    return token
+            except Exception as err:  # noqa: BLE001 - never block registration
+                _LOGGER.debug("FCM: token provider failed (%s), using cached token", err)
+        return self._access_token
+
     async def async_update_access_token(self, new_token: str):
         """Update the access token (after refresh)."""
         self._access_token = new_token

@@ -393,6 +393,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                         access_token=access_token,
                         shared_secret=shared_secret,
                         device_name=device_name,
+                        # Read the token at call time: it is rotated behind our
+                        # back, and a stale copy makes re-registration fail with
+                        # 401 invalid_token.
+                        token_provider=lambda: (siedle._token or {}).get("access_token"),
                     )
                     
                     started = await fcm_handler.async_start()
