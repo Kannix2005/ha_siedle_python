@@ -19,6 +19,10 @@ import ipaddress
 
 _LOGGER = logging.getLogger(__name__)
 
+# A SIP status line is exactly "SIP/2.0 <3-digit code> [reason]". Anything else
+# starting with "SIP/2.0" is a header (Via) from a mis-framed read.
+_SIP_STATUS_LINE = re.compile(r"^SIP/2\.0\s+(\d{3})(?:\s+(.*))?$")
+
 
 def _is_private_ip(host: str) -> bool:
     """Check if a host/IP is on a private (RFC 1918) network."""
@@ -350,19 +354,38 @@ class SipConnection:
             if not lines:
                 return msg
             
-            # Parse first line
+            # Parse first line.
+            #
+            # Only a real status line counts as a response. Testing for the
+            # "SIP/2.0" prefix alone also matched Via headers, which begin
+            # "SIP/2.0/UDP host:port;..." — int() on that raised, and the
+            # message was dropped with an ERROR. That happens because recv()
+            # on a TCP connection does not preserve message boundaries, so a
+            # read can start in the middle of a message.
             first_line = lines[0]
-            if first_line.startswith("SIP/2.0"):
-                # Response
-                parts = first_line.split(" ", 2)
-                msg.status_code = int(parts[1]) if len(parts) > 1 else 0
-                msg.status_text = parts[2] if len(parts) > 2 else ""
+            status = _SIP_STATUS_LINE.match(first_line)
+            if status:
+                msg.status_code = int(status.group(1))
+                msg.status_text = status.group(2) or ""
+            elif first_line.startswith("SIP/2.0"):
+                _LOGGER.debug(
+                    "Ignoring SIP fragment, no valid status line: %s",
+                    first_line[:120],
+                )
+                return msg
             else:
                 # Request
                 msg.is_request = True
                 parts = first_line.split(" ")
                 msg.method = parts[0] if parts else None
                 msg.uri = parts[1] if len(parts) > 1 else None
+                if not msg.method or not msg.uri:
+                    _LOGGER.debug(
+                        "Ignoring SIP fragment, incomplete request line: %s",
+                        first_line[:120],
+                    )
+                    msg.is_request = False
+                    return msg
             
             # Parse headers - preserve ALL headers in order (critical for multi-value headers like Via)
             body_start = -1

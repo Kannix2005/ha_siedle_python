@@ -5,6 +5,14 @@ Alle wichtigen Änderungen an diesem Projekt werden hier dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [3.1.2] - 2026-08-05
+
+### Behoben
+- **`Error parsing SIP message: invalid literal for int()`**: Der Parser hielt jede Zeile, die mit `SIP/2.0` beginnt, für eine Statuszeile — auch einen Via-Header (`SIP/2.0/UDP host:port;rport=…`). Der Versuch, daraus einen Statuscode zu lesen, warf eine Ausnahme, und die Nachricht wurde als ERROR verworfen. Erkannt wird jetzt nur noch eine echte Statuszeile (`SIP/2.0 <dreistelliger Code> [Grund]`); Bruchstücke werden auf Debug-Ebene protokolliert statt als Fehler.
+
+### Bekannt
+- Die eigentliche Quelle solcher Bruchstücke ist die fehlende Nachrichtenrahmung auf TCP-Verbindungen: `recv()` liefert dort keine Nachrichtengrenzen, sodass ein Lesevorgang mitten in einer Nachricht beginnen oder zwei Nachrichten zusammenfassen kann. Das betrifft nur den externen SIP-Anschluss mit `transport: tcp` und tritt selten auf (zweimal an einem Tag). Eine saubere Rahmung über `Content-Length` steht aus.
+
 ## [3.1.1] - 2026-08-04
 
 ### Behoben
