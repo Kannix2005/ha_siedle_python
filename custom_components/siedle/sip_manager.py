@@ -22,6 +22,8 @@ _LOGGER = logging.getLogger(__name__)
 # A SIP status line is exactly "SIP/2.0 <3-digit code> [reason]". Anything else
 # starting with "SIP/2.0" is a header (Via) from a mis-framed read.
 _SIP_STATUS_LINE = re.compile(r"^SIP/2\.0\s+(\d{3})(?:\s+(.*))?$")
+# RFC 3261: Request-Line = Method SP Request-URI SP SIP-Version
+_SIP_REQUEST_LINE = re.compile(r"^([A-Z]+) (\S+) SIP/2\.0$")
 
 
 def _is_private_ip(host: str) -> bool:
@@ -374,18 +376,22 @@ class SipConnection:
                 )
                 return msg
             else:
-                # Request
-                msg.is_request = True
-                parts = first_line.split(" ")
-                msg.method = parts[0] if parts else None
-                msg.uri = parts[1] if len(parts) > 1 else None
-                if not msg.method or not msg.uri:
+                # Request. Only fill in method/uri once the line is known to be
+                # a complete request line — callers drop a message that carries
+                # neither method nor status_code, and that is how a fragment is
+                # discarded. A half-filled message would pass that guard and
+                # then be treated as a response with status_code None.
+                request = _SIP_REQUEST_LINE.match(first_line)
+                if not request:
                     _LOGGER.debug(
-                        "Ignoring SIP fragment, incomplete request line: %s",
+                        "Ignoring SIP fragment, no valid request line: %s",
                         first_line[:120],
                     )
-                    msg.is_request = False
                     return msg
+                method, uri = request.group(1), request.group(2)
+                msg.is_request = True
+                msg.method = method
+                msg.uri = uri
             
             # Parse headers - preserve ALL headers in order (critical for multi-value headers like Via)
             body_start = -1
@@ -1672,7 +1678,7 @@ class SipCallManager:
                         _LOGGER.error(f"Cannot handle {msg.status_code}: no active external call")
                     self._set_state(CallState.IDLE)
             
-            elif msg.status_code >= 400:
+            elif msg.status_code and msg.status_code >= 400:
                 _LOGGER.warning(f"External: Call rejected: {msg.status_code} {msg.status_text}")
                 # Forwarding failed — fall back to recording-only if auto_answer
                 if self.auto_answer and self._siedle_call:
