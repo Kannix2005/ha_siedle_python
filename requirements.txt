@@ -9,7 +9,7 @@ requests-oauthlib>=1.3.0
 pycryptodome>=3.10.0
 
 # Firebase Cloud Messaging for doorbell push detection
-fcm-receiver>=0.1.1
+fcm-receiver==0.1.1
 
 # SRTP key derivation & TLS
 cryptography>=41.0.0

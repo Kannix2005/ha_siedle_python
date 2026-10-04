@@ -122,8 +122,9 @@ class SiedleFCMHandler:
             return True
         
         try:
-            # Import FCM client from pip package fcm-receiver
-            from fcm_receiver import FCMClient
+            # fcm-receiver's own socket handler crashes HA (issue #22), so
+            # use our thread-safe replacement on top of it.
+            from .fcm_transport import SafeFCMClient
         except ImportError as e:
             _LOGGER.error(f"Failed to import FCM receiver: {e}")
             _LOGGER.error("Install with: pip install fcm-receiver")
@@ -139,7 +140,7 @@ class SiedleFCMHandler:
             )
         
         # Setup FCM client
-        self._client = FCMClient()
+        self._client = SafeFCMClient()
         self._client.project_id = SIEDLE_FIREBASE["project_id"]
         self._client.api_key = SIEDLE_FIREBASE["api_key"]
         self._client.app_id = SIEDLE_FIREBASE["app_id"]
@@ -257,20 +258,24 @@ class SiedleFCMHandler:
         self._running = False
         self._stop_event.set()
         
-        # Stop FCM client - method is close() not stop()
+        # close() waits for the reader and reconnect threads, so keep it off
+        # the event loop.
+        await self._hass.async_add_executor_job(self._shutdown_client)
+        
+        self._connected = False
+        _LOGGER.info("Siedle FCM handler stopped")
+    
+    def _shutdown_client(self) -> None:
+        """Close the FCM client and wait for its threads (blocking)."""
         if self._client:
             try:
                 self._client.close()
             except Exception as e:
                 _LOGGER.debug(f"Error closing FCM client: {e}")
-        
-        # Wait for thread to finish
+
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5.0)
-        
-        self._connected = False
-        _LOGGER.info("Siedle FCM handler stopped")
-    
+
     def _load_or_create_credentials(self) -> bool:
         """Load existing FCM credentials or create new ones."""
         try:

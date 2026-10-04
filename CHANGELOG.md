@@ -5,6 +5,15 @@ Alle wichtigen Änderungen an diesem Projekt werden hier dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [3.1.3] - 2026-10-04
+
+### Behoben
+- **Home Assistant stürzte nach einigen FCM-Reconnects mit `SIGSEGV` ab** (#22). Ursache ist der Socket-Handler von `fcm-receiver` 0.1.1: Alle Verbindungen teilen sich ein Stop-Event, das bei jedem Start zurückgesetzt wird, sodass Heartbeat- und Watchdog-Threads alter Verbindungen nie enden. Vor allem liest sein Reader `self.sock` in jeder Runde neu — nach einem Reconnect übernimmt der alte Reader den neuen Socket, und zwei Threads rufen `SSL_read` auf demselben SSL-Objekt auf. Das zerstört nativen Speicher. Ein Reconnect, der beim Stoppen noch wählte, lief außerdem trotzdem zu Ende und hinterließ eine Zombie-Verbindung. Die Integration ersetzt diesen Teil jetzt durch einen eigenen Transport (`fcm_transport.py`): genau ein Thread pro Verbindung, der als einziger auf seinen Socket zugreift und ihn auch selbst schließt; Ereignisse überholter Verbindungen werden verworfen, und nach dem Stoppen wird nicht mehr neu verbunden.
+- Das Stoppen des FCM-Handlers wartet auf die Threads nicht mehr im Event-Loop, sondern im Executor.
+
+### Geändert
+- `fcm-receiver` ist auf `==0.1.1` festgelegt, weil der neue Transport auf dessen Interna aufsetzt.
+
 ## [3.1.2] - 2026-08-05
 
 ### Behoben
