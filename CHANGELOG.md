@@ -5,6 +5,11 @@ Alle wichtigen Änderungen an diesem Projekt werden hier dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [3.1.4] - 2026-10-05
+
+### Geändert
+- `requests`, `cryptography` und `aiohttp` stehen nicht mehr in den Requirements des Manifests. Home Assistant bringt alle drei selbst mit, und Hassfest lehnt solche Einträge inzwischen ab. Außerdem kann HA damit beim Laden der Integration keine abweichende `cryptography`-Version mehr nachinstallieren, die die Krypto-Bibliotheken im Core-Container aus dem Tritt bringt.
+
 ## [3.1.3] - 2026-10-04
 
 ### Behoben
