@@ -137,6 +137,11 @@ class SipCall:
     via_branch: str = field(default_factory=lambda: f"z9hG4bK-{uuid.uuid4().hex[:12]}")
     sdp_session_id: str = field(default_factory=lambda: str(int(time.time())))
     invite_data: Optional[bytes] = None  # Store original INVITE for response
+    # Outgoing calls: CSeq number of the pending INVITE (ACK and CANCEL reuse it),
+    # the exact From header we sent, and whether credentials were already tried.
+    invite_cseq: int = 1
+    local_from: Optional[str] = None
+    auth_attempted: bool = False
     
     def next_cseq(self) -> int:
         """Get and increment CSeq."""
@@ -454,7 +459,8 @@ class SipConnection:
         return "\r\n".join(lines).encode('utf-8')
     
     def create_invite(self, to_uri: str, local_rtp_port: int, call_id: Optional[str] = None,
-                      sdp_override: Optional[str] = None) -> Tuple[bytes, SipCall]:
+                      sdp_override: Optional[str] = None, from_tag: Optional[str] = None,
+                      cseq: int = 1, auth_header: Optional[str] = None) -> Tuple[bytes, SipCall]:
         """Create SIP INVITE message with SDP.
         
         Args:
@@ -462,12 +468,14 @@ class SipConnection:
             local_rtp_port: RTP port for default SDP
             call_id: Optional Call-ID
             sdp_override: Optional custom SDP body (replaces default SDP)
+            from_tag, cseq: set when re-sending an INVITE with credentials —
+                RFC 3261 §8.1.3.5 keeps Call-ID and From tag and increments CSeq
+            auth_header: complete (Proxy-)Authorization header line
         """
         local_ip = self._get_local_ip()
         call_id = call_id or str(uuid.uuid4())
-        from_tag = uuid.uuid4().hex[:8]
+        from_tag = from_tag or uuid.uuid4().hex[:8]
         branch = uuid.uuid4().hex[:12]
-        cseq = 1
         
         transport_str = self.config.transport_str
         display_name = self.config.display_name or "Siedle Türstation"
@@ -492,15 +500,17 @@ class SipConnection:
                 f"a=sendrecv\r\n"
             )
         
+        local_from = f'"{display_name}" <sip:{self.config.username}@{self.config.host}>;tag={from_tag}'
         lines = [
             f"INVITE {to_uri} SIP/2.0",
             f"Via: SIP/2.0/{transport_str} {local_ip}:{self._local_port};rport;branch=z9hG4bK-{branch}",
             "Max-Forwards: 70",
-            f'From: "{display_name}" <sip:{self.config.username}@{self.config.host}>;tag={from_tag}',
+            f"From: {local_from}",
             f"To: <{to_uri}>",
             f"Call-ID: {call_id}",
             f"CSeq: {cseq} INVITE",
             f"Contact: <sip:{self.config.username}@{local_ip}:{self._local_port};transport={transport_str.lower()}>",
+            *([auth_header] if auth_header else []),
             "Content-Type: application/sdp",
             f"Content-Length: {len(sdp)}",
             "",
@@ -514,6 +524,11 @@ class SipConnection:
             from_tag=from_tag,
             local_rtp_port=local_rtp_port,
             state=CallState.RINGING_OUT,
+            cseq=cseq + 1,  # next in-dialog request (BYE)
+            via_branch=f"z9hG4bK-{branch}",
+            invite_cseq=cseq,
+            local_from=local_from,
+            auth_attempted=auth_header is not None,
         )
         
         return "\r\n".join(lines).encode('utf-8'), call
@@ -599,7 +614,7 @@ class SipConnection:
             f"BYE {call.to_uri} SIP/2.0",
             f"Via: SIP/2.0/{transport_str} {local_ip}:{self._local_port};rport;branch=z9hG4bK-{branch}",
             "Max-Forwards: 70",
-            f"From: <{call.from_uri}>;tag={call.from_tag}",
+            f"From: {call.local_from or f'<{call.from_uri}>;tag={call.from_tag}'}",
             f"To: {to_header}",
             f"Call-ID: {call.call_id}",
             f"CSeq: {cseq} BYE",
@@ -611,27 +626,56 @@ class SipConnection:
         return "\r\n".join(lines).encode('utf-8')
     
     def create_ack(self, call: SipCall, for_response: SipMessage) -> bytes:
-        """Create SIP ACK message."""
+        """Create SIP ACK message.
+
+        RFC 3261 §17.1.1.3: the ACK for a non-2xx final response belongs to the
+        INVITE transaction and must carry the INVITE's Via branch — with a new
+        branch the server cannot match it (a FRITZ!Box answers 481). Only the
+        ACK for a 2xx is a transaction of its own and gets a fresh branch.
+        """
         local_ip = self._get_local_ip()
-        branch = uuid.uuid4().hex[:12]
+        if (for_response.status_code or 0) >= 300:
+            branch = call.via_branch
+        else:
+            branch = f"z9hG4bK-{uuid.uuid4().hex[:12]}"
         transport_str = self.config.transport_str
-        
-        # Extract to_tag from response
-        to_header = for_response.to_header
         
         lines = [
             f"ACK {call.to_uri} SIP/2.0",
-            f"Via: SIP/2.0/{transport_str} {local_ip}:{self._local_port};rport;branch=z9hG4bK-{branch}",
+            f"Via: SIP/2.0/{transport_str} {local_ip}:{self._local_port};rport;branch={branch}",
             "Max-Forwards: 70",
-            f"From: <{call.from_uri}>;tag={call.from_tag}",
-            f"To: {to_header}",
+            f"From: {call.local_from or f'<{call.from_uri}>;tag={call.from_tag}'}",
+            f"To: {for_response.to_header}",  # carries the to-tag of the response
             f"Call-ID: {call.call_id}",
-            f"CSeq: {call.cseq} ACK",  # Same CSeq as INVITE
+            f"CSeq: {call.invite_cseq} ACK",  # Same CSeq number as the INVITE
             "Content-Length: 0",
             "",
             "",
         ]
         
+        return "\r\n".join(lines).encode('utf-8')
+
+    def create_cancel(self, call: SipCall) -> bytes:
+        """Create a CANCEL for the pending INVITE of an outgoing call.
+
+        RFC 3261 §9.1: Request-URI, Call-ID, To, From, the CSeq number and the
+        top Via (including the branch) must equal those of the INVITE,
+        otherwise the server cannot find the transaction to cancel.
+        """
+        local_ip = self._get_local_ip()
+        transport_str = self.config.transport_str
+        lines = [
+            f"CANCEL {call.to_uri} SIP/2.0",
+            f"Via: SIP/2.0/{transport_str} {local_ip}:{self._local_port};rport;branch={call.via_branch}",
+            "Max-Forwards: 70",
+            f"From: {call.local_from or f'<{call.from_uri}>;tag={call.from_tag}'}",
+            f"To: <{call.to_uri}>",
+            f"Call-ID: {call.call_id}",
+            f"CSeq: {call.invite_cseq} CANCEL",
+            "Content-Length: 0",
+            "",
+            "",
+        ]
         return "\r\n".join(lines).encode('utf-8')
 
     def connect(self) -> bool:
@@ -1083,6 +1127,8 @@ class SipCallManager:
         
         # F2: Current forwarding target index (for sequential forwarding)
         self._forward_target_index: int = 0
+        # (Call-ID, CSeq) of the last SIP INFO handled, to drop retransmissions
+        self._last_info: Optional[Tuple[Optional[str], Optional[str]]] = None
     
     @property
     def state(self) -> CallState:
@@ -1184,17 +1230,7 @@ class SipCallManager:
                 # F2: Try next target
                 _LOGGER.info(f"Trying next target [{next_index}]: {targets[next_index]}")
                 
-                # Send CANCEL to current external call
-                if self._external_call and self._external_conn:
-                    try:
-                        cancel_msg = self._build_cancel_for_invite()
-                        if cancel_msg:
-                            self._external_conn.send(cancel_msg)
-                            _LOGGER.info("CANCEL sent to current external target")
-                    except Exception as e:
-                        _LOGGER.warning(f"Failed to CANCEL external: {e}")
-                
-                self._external_call = None
+                self._cancel_external_invite()
                 self._forward_target_index = next_index
                 
                 # Forward to next target
@@ -1204,6 +1240,9 @@ class SipCallManager:
                 _LOGGER.info("All forward targets exhausted")
                 if self.auto_answer and self._siedle_call:
                     _LOGGER.info("Falling back to recording-only mode")
+                    # Stop the phone ringing; a late answer must not bridge
+                    # into the call we are about to answer ourselves.
+                    self._cancel_external_invite()
                     self._answer_siedle_call()
                 else:
                     self._end_call()
@@ -1219,33 +1258,27 @@ class SipCallManager:
             self._forward_timeout_timer.cancel()
             self._forward_timeout_timer = None
     
+    def _cancel_external_invite(self):
+        """Give up the ringing external call: forget it, then send CANCEL.
+
+        Forgetting it first makes the 487 that follows a stale response, which
+        is only ACKed instead of being taken for a rejection of the call.
+        """
+        call, self._external_call = self._external_call, None
+        if not call or not self._external_conn:
+            return
+        try:
+            self._external_conn.send(self._external_conn.create_cancel(call))
+            _LOGGER.info("CANCEL sent to current external target")
+        except Exception as e:
+            _LOGGER.warning(f"Failed to CANCEL external: {e}")
+    
     def _build_cancel_for_invite(self) -> Optional[bytes]:
         """Build a CANCEL request for the current external INVITE."""
         if not self._external_call or not self._external_conn:
             return None
         
-        local_ip = self._external_conn._get_local_ip()
-        local_port = self._external_conn.config.port
-        transport_str = self._external_conn.config.transport_str
-        branch = uuid.uuid4().hex[:12]
-        
-        targets = self._get_forward_targets()
-        target_idx = min(self._forward_target_index, len(targets) - 1) if targets else 0
-        to_uri = self._external_call.to_uri or (
-            f"sip:{targets[target_idx]}@{self.external_config.host}" if targets else ""
-        )
-        
-        cancel = (
-            f"CANCEL {to_uri} SIP/2.0\r\n"
-            f"Via: SIP/2.0/{transport_str} {local_ip}:{local_port};branch=z9hG4bK{branch}\r\n"
-            f"From: {self._external_call.from_uri}\r\n"
-            f"To: {self._external_call.to_uri}\r\n"
-            f"Call-ID: {self._external_call.call_id}\r\n"
-            f"CSeq: 1 CANCEL\r\n"
-            f"Max-Forwards: 70\r\n"
-            f"Content-Length: 0\r\n\r\n"
-        )
-        return cancel.encode('utf-8')
+        return self._external_conn.create_cancel(self._external_call)
     
     def _setup_dtmf_detection(self):
         """Set up DTMF detection on the RTP bridge (F8)."""
@@ -1555,139 +1588,11 @@ class SipCallManager:
             self._set_state(CallState.RINGING_IN, {"source": "external", "from": msg.from_header})
         
         elif not msg.is_request:
-            # Response to OUR outbound INVITE (doorbell → phone forwarding)
-            if msg.status_code == 100:
-                _LOGGER.info("External: 100 Trying")
-            
-            elif msg.status_code == 180 or msg.status_code == 183:
-                _LOGGER.info("External: Ringing...")
-                # TODO: Optionally send 180 Ringing upstream to Siedle
-            
-            elif msg.status_code == 200:
-                _LOGGER.info("External: 200 OK — Phone picked up!")
-                
-                # F1: Cancel forward timeout — phone answered
-                self._cancel_forward_timeout()
-                
-                if self._external_call:
-                    self._external_call.to_tag = self._extract_tag(msg.to_header)
-                    self._external_call.state = CallState.CONNECTED
-                    self._external_call.remote_rtp_port = msg.get_sdp_media_port() or 0
-                    self._external_call.remote_rtp_host = msg.get_sdp_connection_ip()
-                    
-                    _LOGGER.info(f"External RTP endpoint: {self._external_call.remote_rtp_host}:{self._external_call.remote_rtp_port}")
-                    
-                    # Send ACK to external
-                    ack = self._external_conn.create_ack(self._external_call, msg)
-                    self._external_conn.send(ack)
-                    _LOGGER.info("ACK sent to external")
-                    
-                    # Now answer Siedle with bridging
-                    self._answer_siedle_and_bridge()
-                    self._set_state(CallState.CONNECTED, {
-                        "external_host": self._external_call.remote_rtp_host,
-                        "external_port": self._external_call.remote_rtp_port,
-                    })
-            
-            elif msg.status_code in (401, 407):
-                # 401 Unauthorized or 407 Proxy Auth Required — retry INVITE with credentials
-                # Safety: only process if there's an active external call (INVITE in progress)
-                if not self._external_call or self._state == CallState.IDLE:
-                    _LOGGER.debug(f"External: {msg.status_code} response ignored (no active call)")
-                    return
-                is_proxy = (msg.status_code == 407)
-                auth_header_name = "Proxy-Authenticate" if is_proxy else "WWW-Authenticate"
-                auth_value = msg.headers.get(auth_header_name, "")
-                if not auth_value:
-                    # Try both headers as fallback
-                    auth_value = msg.headers.get("WWW-Authenticate") or msg.headers.get("Proxy-Authenticate", "")
-                _LOGGER.info(f"External: {msg.status_code} {'Proxy Auth Required' if is_proxy else 'Unauthorized'} — retrying with credentials")
-                realm_match = re.search(r'realm="([^"]+)"', auth_value)
-                nonce_match = re.search(r'nonce="([^"]+)"', auth_value)
-                
-                if realm_match and nonce_match and self._external_call:
-                    self._external_conn._realm = realm_match.group(1)
-                    self._external_conn._nonce = nonce_match.group(1)
-                    
-                    # F2: Use current target from list
-                    targets = self._get_forward_targets()
-                    current_target = targets[self._forward_target_index] if targets else self.forward_to_number
-                    to_uri = f"sip:{current_target}@{self.external_config.host}"
-                    response_digest = self._external_conn._compute_digest("INVITE", to_uri)
-                    
-                    # Rebuild the INVITE with Proxy-Authorization
-                    # Reuse the same SDP from the original INVITE
-                    local_ip = self._external_conn._get_local_ip()
-                    branch = uuid.uuid4().hex[:12]
-                    transport_str = self._external_conn.config.transport_str
-                    
-                    # We need the SDP — reconstruct from rtp_bridge
-                    sdp_ip_b = local_ip
-                    sdp_port_b = self.rtp_bridge.local_port_b if self.rtp_bridge else 20000
-                    
-                    session_id = str(int(time.time()))
-                    ext_sdp = (
-                        f"v=0\r\n"
-                        f"o=- {session_id} {session_id} IN IP4 {sdp_ip_b}\r\n"
-                        f"s=Siedle Doorbell\r\n"
-                        f"c=IN IP4 {sdp_ip_b}\r\n"
-                        f"t=0 0\r\n"
-                        f"m=audio {sdp_port_b} RTP/AVP 8 0 101\r\n"
-                        f"a=rtpmap:8 PCMA/8000\r\n"
-                        f"a=rtpmap:0 PCMU/8000\r\n"
-                        f"a=rtpmap:101 telephone-event/8000\r\n"
-                        f"a=fmtp:101 0-16\r\n"
-                        f"a=ptime:20\r\n"
-                        f"a=sendrecv\r\n"
-                    )
-                    
-                    # Send ACK for the 401/407 first (required by SIP)
-                    ack = self._external_conn.create_ack(self._external_call, msg)
-                    self._external_conn.send(ack)
-                    
-                    # Resend INVITE with auth
-                    invite_msg, call = self._external_conn.create_invite(
-                        to_uri, sdp_port_b, call_id=self._external_call.call_id,
-                        sdp_override=ext_sdp
-                    )
-                    
-                    # Inject Authorization or Proxy-Authorization header
-                    auth_prefix = "Proxy-Authorization" if is_proxy else "Authorization"
-                    invite_str = invite_msg.decode('utf-8')
-                    auth_header = (
-                        f'{auth_prefix}: Digest username="{self._external_conn.config.username}", '
-                        f'realm="{self._external_conn._realm}", '
-                        f'nonce="{self._external_conn._nonce}", '
-                        f'uri="{to_uri}", '
-                        f'response="{response_digest}", '
-                        f'algorithm=MD5'
-                    )
-                    # Insert before Content-Type
-                    invite_str = invite_str.replace(
-                        "Content-Type: application/sdp",
-                        f"{auth_header}\r\nContent-Type: application/sdp"
-                    )
-                    
-                    self._external_call = call
-                    self._external_conn.send(invite_str.encode('utf-8'))
-                    _LOGGER.info(f"Resent INVITE with {auth_prefix}")
-                else:
-                    if not realm_match or not nonce_match:
-                        _LOGGER.error(f"Cannot handle {msg.status_code}: missing realm/nonce in: {auth_value}")
-                    else:
-                        _LOGGER.error(f"Cannot handle {msg.status_code}: no active external call")
-                    self._set_state(CallState.IDLE)
-            
-            elif msg.status_code and msg.status_code >= 400:
-                _LOGGER.warning(f"External: Call rejected: {msg.status_code} {msg.status_text}")
-                # Forwarding failed — fall back to recording-only if auto_answer
-                if self.auto_answer and self._siedle_call:
-                    _LOGGER.info("Forwarding failed, falling back to recording-only mode")
-                    self._answer_siedle_call()
-                else:
-                    # Full cleanup — not just state reset
-                    _LOGGER.info("Forwarding failed, no fallback — cleaning up")
-                    self._end_call()
+            self._handle_external_response(msg)
+        
+        elif msg.is_request and msg.method == "INFO":
+            self._send_ok_response(self._external_conn, msg)
+            self._handle_external_info(msg)
         
         elif msg.is_request and msg.method == "BYE":
             _LOGGER.info("External: BYE received — phone hung up")
@@ -1695,6 +1600,168 @@ class SipCallManager:
             # Propagate: also hang up Siedle side
             _LOGGER.info("Propagating hangup to Siedle side...")
             self._end_call()
+    
+    def _handle_external_response(self, msg: SipMessage):
+        """Handle a response from the external SIP server.
+
+        Only responses to the pending INVITE (same Call-ID and CSeq number) may
+        change the call. Everything else — responses to CANCEL/BYE, to an
+        INVITE we already replaced or gave up, retransmissions — must not: a
+        FRITZ!Box answers the superseded first INVITE of a digest handshake
+        with a 481, and treating that as a rejection tore down the call that
+        was just being set up.
+        """
+        status = msg.status_code or 0
+        cseq_parts = (msg.cseq or "").split()
+        cseq_num = int(cseq_parts[0]) if cseq_parts and cseq_parts[0].isdecimal() else None
+        cseq_method = cseq_parts[-1] if cseq_parts else ""
+        
+        if cseq_method != "INVITE":
+            _LOGGER.debug("External: %s response to %s — ignored", status, cseq_method or "unknown request")
+            return
+        
+        call = self._external_call
+        if not call or msg.call_id != call.call_id or cseq_num != call.invite_cseq:
+            self._handle_stale_invite_response(msg, cseq_num)
+            return
+        
+        if status == 100:
+            _LOGGER.info("External: 100 Trying")
+        
+        elif status < 200:
+            _LOGGER.info("External: Ringing...")
+            # TODO: Optionally send 180 Ringing upstream to Siedle
+        
+        elif status < 300:
+            # The server repeats the 200 OK until it sees our ACK
+            self._external_conn.send(self._external_conn.create_ack(call, msg))
+            if call.state == CallState.CONNECTED:
+                _LOGGER.debug("External: retransmitted 200 OK — ACK sent again")
+                return
+            _LOGGER.info("External: 200 OK — Phone picked up! ACK sent")
+            
+            # F1: Cancel forward timeout — phone answered
+            self._cancel_forward_timeout()
+            
+            call.to_tag = self._extract_tag(msg.to_header)
+            call.state = CallState.CONNECTED
+            call.remote_rtp_port = msg.get_sdp_media_port() or 0
+            call.remote_rtp_host = msg.get_sdp_connection_ip()
+            _LOGGER.info(f"External RTP endpoint: {call.remote_rtp_host}:{call.remote_rtp_port}")
+            
+            # Now answer Siedle with bridging
+            self._answer_siedle_and_bridge()
+            self._set_state(CallState.CONNECTED, {
+                "external_host": call.remote_rtp_host,
+                "external_port": call.remote_rtp_port,
+            })
+        
+        else:
+            # Final non-2xx response: always ACK it (RFC 3261 §17.1.1.3),
+            # otherwise the server keeps retransmitting it over UDP.
+            self._external_conn.send(self._external_conn.create_ack(call, msg))
+            
+            if status in (401, 407) and not call.auth_attempted:
+                is_proxy = (status == 407)
+                auth_value = (
+                    msg.headers.get("Proxy-Authenticate" if is_proxy else "WWW-Authenticate")
+                    or msg.headers.get("WWW-Authenticate")
+                    or msg.headers.get("Proxy-Authenticate", "")
+                )
+                realm_match = re.search(r'realm="([^"]+)"', auth_value)
+                nonce_match = re.search(r'nonce="([^"]+)"', auth_value)
+                if realm_match and nonce_match:
+                    _LOGGER.info(f"External: {status} {'Proxy Auth Required' if is_proxy else 'Unauthorized'} — retrying with credentials")
+                    self._external_conn._realm = realm_match.group(1)
+                    self._external_conn._nonce = nonce_match.group(1)
+                    target = call.to_uri[len("sip:"):].split("@")[0]
+                    self._send_external_invite(target, retry_of=call, proxy_auth=is_proxy)
+                    _LOGGER.info(f"Resent INVITE with {'Proxy-Authorization' if is_proxy else 'Authorization'}")
+                    return
+                _LOGGER.error(f"Cannot handle {status}: missing realm/nonce in: {auth_value}")
+            
+            _LOGGER.warning(f"External: Call rejected: {status} {msg.status_text}")
+            # The INVITE transaction is finished — nothing left to CANCEL
+            self._external_call = None
+            self._cancel_forward_timeout()
+            # Forwarding failed — fall back to recording-only if auto_answer
+            if self.auto_answer and self._siedle_call:
+                _LOGGER.info("Forwarding failed, falling back to recording-only mode")
+                self._answer_siedle_call()
+            else:
+                # Full cleanup — not just state reset
+                _LOGGER.info("Forwarding failed, no fallback — cleaning up")
+                self._end_call()
+    
+    def _handle_stale_invite_response(self, msg: SipMessage, cseq_num: Optional[int]):
+        """Finish an INVITE transaction that no longer belongs to the active call.
+
+        A final response still has to be ACKed, and a call that was answered
+        after we gave up on it has to be hung up — otherwise the phone stays
+        "connected" to nothing while the server repeats its 200 OK.
+        """
+        status = msg.status_code or 0
+        if status < 200 or cseq_num is None or not msg.call_id:
+            _LOGGER.debug("External: %s for an INVITE that is no longer pending — ignored", status)
+            return
+        
+        branch = re.search(r'branch=([^;,\s]+)', msg.via or "")
+        stale = SipCall(
+            call_id=msg.call_id,
+            from_uri=self._extract_uri(msg.from_header),
+            to_uri=self._extract_uri(msg.to_header),
+            from_tag=self._extract_tag(msg.from_header) or "",
+            to_tag=self._extract_tag(msg.to_header),
+            cseq=cseq_num + 1,
+            via_branch=branch.group(1) if branch else "",
+            invite_cseq=cseq_num,
+            local_from=msg.from_header,
+        )
+        self._external_conn.send(self._external_conn.create_ack(stale, msg))
+        if status < 300:
+            self._external_conn.send(self._external_conn.create_bye(stale))
+            _LOGGER.info("External: 200 OK for a call we already gave up — ACK and BYE sent")
+        else:
+            _LOGGER.debug("External: %s %s for an INVITE that is no longer pending — ACK sent", status, msg.status_text)
+    
+    def _handle_external_info(self, msg: SipMessage):
+        """Evaluate a SIP INFO from the phone side as a DTMF key press.
+
+        Some servers (FRITZ!Box) deliver key presses as SIP INFO instead of, or
+        in addition to, RFC 4733 telephone-events in the RTP stream.
+        """
+        call = self._external_call
+        if not call or msg.call_id != call.call_id:
+            return
+        if self._last_info == (msg.call_id, msg.cseq):
+            return  # retransmission
+        self._last_info = (msg.call_id, msg.cseq)
+        
+        content_type = next(
+            (v for k, v in msg.header_list if k.lower() in ("content-type", "c")), ""
+        ).lower()
+        body = msg.body.strip()
+        _LOGGER.debug("External: INFO (%s): %r", content_type, body[:100])
+        
+        digit = None
+        if "dtmf-relay" in content_type:
+            signal = re.search(r'Signal\s*=\s*(\S+)', body, re.IGNORECASE)
+            digit = signal.group(1) if signal else None
+        elif "application/dtmf" in content_type:
+            digit = body
+        digit = {"10": "*", "11": "#"}.get(digit, digit)
+        
+        if digit and len(digit) == 1 and digit.upper() in "0123456789*#ABCD":
+            if self.rtp_bridge:
+                self.rtp_bridge.inject_dtmf_digit(digit.upper())
+        else:
+            _LOGGER.debug("External: INFO carries no DTMF digit — ignored")
+    
+    @staticmethod
+    def _extract_uri(header: Optional[str]) -> str:
+        """Extract the URI from a From/To header value."""
+        match = re.search(r'<([^>]+)>', header or "")
+        return match.group(1) if match else (header or "").split(";")[0].strip()
     
     def _extract_tag(self, header: Optional[str]) -> Optional[str]:
         """Extract tag from SIP header."""
@@ -1865,6 +1932,21 @@ class SipCallManager:
 
     def _forward_to_external_target(self, target_number: str):
         """Send INVITE to a specific external target (supports F2 sequential forwarding)."""
+        self._send_external_invite(target_number)
+        
+        self._set_state(CallState.RINGING_OUT, {"target": target_number})
+        
+        # F1: Start forward timeout
+        self._start_forward_timeout()
+    
+    def _send_external_invite(self, target_number: str, retry_of: Optional[SipCall] = None,
+                              proxy_auth: bool = False):
+        """Build and send the INVITE for a forwarding target.
+
+        With retry_of the INVITE answers a 401/407 challenge: same Call-ID and
+        From tag, next CSeq, and a digest computed from the realm/nonce stored
+        on the connection.
+        """
         sdp_ip_b = getattr(self, '_cached_sdp_ip_b', self._external_conn._get_local_ip())
         sdp_port_b = getattr(self, '_cached_sdp_port_b', 20000)
         local_rtp_port_b = getattr(self, '_cached_local_rtp_port_b', 20000)
@@ -1886,19 +1968,30 @@ class SipCallManager:
             f"a=sendrecv\r\n"
         )
         
-        # Send INVITE to target
         to_uri = f"sip:{target_number}@{self.external_config.host}"
+        retry_args = {}
+        if retry_of:
+            conn = self._external_conn
+            retry_args = {
+                "call_id": retry_of.call_id,
+                "from_tag": retry_of.from_tag,
+                "cseq": retry_of.invite_cseq + 1,
+                "auth_header": (
+                    f'{"Proxy-Authorization" if proxy_auth else "Authorization"}: '
+                    f'Digest username="{conn.config.username}", '
+                    f'realm="{conn._realm}", '
+                    f'nonce="{conn._nonce}", '
+                    f'uri="{to_uri}", '
+                    f'response="{conn._compute_digest("INVITE", to_uri)}", '
+                    f'algorithm=MD5'
+                ),
+            }
         invite_msg, call = self._external_conn.create_invite(
-            to_uri, local_rtp_port_b, sdp_override=ext_sdp
+            to_uri, local_rtp_port_b, sdp_override=ext_sdp, **retry_args
         )
         self._external_call = call
         self._external_conn.send(invite_msg)
-        
-        self._set_state(CallState.RINGING_OUT, {"target": target_number})
         _LOGGER.info(f"INVITE sent to external: {to_uri} (RTP {sdp_ip_b}:{sdp_port_b})")
-        
-        # F1: Start forward timeout
-        self._start_forward_timeout()
     
     def _answer_siedle_call(self):
         """Send 200 OK to Siedle INVITE."""

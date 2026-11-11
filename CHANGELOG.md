@@ -5,6 +5,26 @@ Alle wichtigen Änderungen an diesem Projekt werden hier dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [3.1.5] - 2026-11-11
+
+### Behoben
+- **Rufweiterleitung an eine FRITZ!Box brach direkt nach der Anmeldung ab — das Telefon klingelte, aber es gab keinen Ton** (#23, vermutlich auch #21). Verlangt der SIP-Server für das INVITE eine Digest-Anmeldung (`401`/`407`), lief die Wiederholung an RFC 3261 vorbei:
+  - Das ACK auf die `401` trug einen neuen Via-Branch statt den des INVITE. Der Server konnte es keiner Transaktion zuordnen; die FRITZ!Box antwortet darauf mit `481 Call Leg/Transaction Does Not Exist`.
+  - Antworten wurden keiner Anfrage zugeordnet. Jede Antwort ab `400` galt als Ablehnung des laufenden Anrufs — auch diese `481`, die Antwort auf ein CANCEL oder die Wiederholung einer längst erledigten Absage. Der Anruf wurde abgebaut, während die Gegenstelle ihn gerade aufbaute. Jetzt wirken nur noch Antworten auf das aktuell offene INVITE (Call-ID und CSeq-Nummer müssen passen).
+  - Das INVITE mit Zugangsdaten begann einen neuen Dialog (neuer From-Tag, wieder `CSeq: 1`). Es behält jetzt Call-ID und From-Tag und zählt die CSeq hoch. Scheitert auch der Versuch mit Zugangsdaten, wird abgebrochen statt endlos wiederholt.
+  - Die SDP der Wiederholung nannte immer die lokale Adresse, auch wenn für einen externen SIP-Server per STUN eine öffentliche ermittelt worden war.
+- **Abgebrochene Weiterleitungen klingelten am Telefon weiter.** Das CANCEL passte nicht zum INVITE (anderer Via-Branch, Server- statt eigener Port im Via, From ohne Tag, feste `CSeq: 1`) und wurde vom Server deshalb nicht dem Anruf zugeordnet. Es wird jetzt aus den Daten des offenen INVITE gebaut.
+- **Absagen wurden nie bestätigt.** Auf `486 Busy Here`, `487 Request Terminated` usw. folgte kein ACK; über UDP wiederholt der Server die Antwort dann rund 30 Sekunden lang, und jede Wiederholung wurde erneut als Absage verarbeitet — notfalls mitten im nächsten Klingeln. Endantworten werden jetzt immer per ACK abgeschlossen und Wiederholungen nicht mehr ausgewertet.
+- **Ein nach dem Abbruch noch angenommener Anruf blieb als stumme Verbindung stehen.** Kommt das `200 OK` erst, nachdem die Integration den Anruf aufgegeben hat, wird es jetzt bestätigt und die Verbindung sofort mit BYE beendet. Ein wiederholtes `200 OK` für ein laufendes Gespräch wird nur noch erneut bestätigt, statt die Audiobrücke ein zweites Mal aufzubauen.
+- Läuft die Weiterleitung in den Timeout und die Integration nimmt den Anruf selbst an (Auto-Answer), bricht sie das Klingeln am Telefon jetzt per CANCEL ab. Bisher klingelte es weiter, und ein spätes Abheben wurde in das bereits angenommene Gespräch gebrückt.
+- Das BYE eines weitergeleiteten Anrufs trug dieselbe CSeq-Nummer wie das INVITE statt der nächsten.
+
+### Hinzugefügt
+- **DTMF-Türöffner über SIP INFO** (#23): Die FRITZ!Box meldet Tastendrücke als `INFO`-Anfrage. Diese wurden weder beantwortet noch ausgewertet. `application/dtmf-relay` und `application/dtmf` landen jetzt in derselben Erkennung wie die Töne aus dem RTP-Strom (RFC 4733); meldet der Server eine Taste auf beiden Wegen, zählt sie einmal.
+
+### Hinweis
+- 3.1.4 wurde nie als Release veröffentlicht; die Änderung von dort ist in 3.1.5 enthalten.
+
 ## [3.1.4] - 2026-10-05
 
 ### Geändert

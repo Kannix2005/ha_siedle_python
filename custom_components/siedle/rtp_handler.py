@@ -267,6 +267,7 @@ class DtmfDetector:
         self._accumulated = ""
         self._last_digit_time = 0.0
         self._last_event: Optional[int] = None  # Track last RFC 4733 event to deduplicate
+        self._last_digit: Optional[Tuple[str, str]] = None  # (digit, source) of the last key press
         self._lock = threading.Lock()
         self._timer: Optional[threading.Timer] = None
     
@@ -306,11 +307,27 @@ class DtmfDetector:
         if not digit:
             return None
         
-        _LOGGER.info(f"DTMF detected: '{digit}' (event={event_code})")
+        return self.process_digit(digit, source="rtp")
+    
+    # A server may report one key press on both channels (RTP and SIP INFO)
+    CROSS_SOURCE_WINDOW = 1.0
+    
+    def process_digit(self, digit: str, source: str = "info") -> Optional[str]:
+        """Process a detected DTMF digit, whatever channel it arrived on.
         
+        Returns the digit, or None if it repeats a key press already reported
+        through the other channel.
+        """
         with self._lock:
+            now = time.time()
+            if (self._last_digit and self._last_digit[0] == digit
+                    and self._last_digit[1] != source
+                    and now - self._last_digit_time < self.CROSS_SOURCE_WINDOW):
+                return None
+            self._last_digit = (digit, source)
+            _LOGGER.info(f"DTMF detected: '{digit}' (via {source})")
             self._accumulated += digit
-            self._last_digit_time = time.time()
+            self._last_digit_time = now
             
             # Cancel previous timeout timer
             if self._timer:
@@ -821,6 +838,11 @@ class RtpBridge:
             code_timeout=code_timeout,
         )
         _LOGGER.info("DTMF detection enabled on RTP bridge")
+    
+    def inject_dtmf_digit(self, digit: str):
+        """Feed a DTMF digit that arrived out of band (SIP INFO) into detection."""
+        if self._dtmf_detector:
+            self._dtmf_detector.process_digit(digit)
     
     def play_announcement(
         self,
