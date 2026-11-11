@@ -1572,20 +1572,17 @@ class SipCallManager:
                     except Exception as e:
                         _LOGGER.error(f"Incoming external callback error: {e}")
             
-            # Store call info
-            self._external_call = SipCall(
-                call_id=msg.call_id,
-                from_uri=msg.from_header,
-                to_uri=msg.to_header,
-                from_tag=self._extract_tag(msg.from_header),
-                state=CallState.RINGING_IN,
-                remote_rtp_host=msg.get_sdp_connection_ip(),
-                remote_rtp_port=msg.get_sdp_media_port() or 0,
-                invite_data=msg.raw.encode('utf-8'),
-            )
-            
-            # TODO: Forward incoming external calls to Siedle door station
-            self._set_state(CallState.RINGING_IN, {"source": "external", "from": msg.from_header})
+            # Calling the door station from the phone side is not implemented.
+            # Decline instead of leaving the INVITE unanswered: it used to
+            # replace the forwarded call in progress and leave the state stuck
+            # in "ringing", while the server kept retransmitting the INVITE.
+            call = self._external_call
+            if call and msg.call_id == call.call_id:
+                # re-INVITE within the forwarded call: refuse the change, the call goes on
+                response = self._external_conn.create_response(msg, 488, "Not Acceptable Here")
+            else:
+                response = self._external_conn.create_response(msg, 603, "Decline")
+            self._external_conn.send(response)
         
         elif not msg.is_request:
             self._handle_external_response(msg)
@@ -2435,7 +2432,9 @@ class SipCallManager:
                 self._external_conn.add_callback(self._handle_external_message)
                 self._external_conn.start_listen_loop()
             else:
-                _LOGGER.warning("Failed to register with external SIP - forwarding disabled")
+                _LOGGER.warning("Failed to register with external SIP - forwarding disabled until it can be reached")
+                # Mark the connection as lost so the health monitor retries
+                self._external_conn.stop()
         
         self._running = True
         
@@ -2473,6 +2472,10 @@ class SipCallManager:
             return True
         else:
             _LOGGER.error("Failed to reconnect to Siedle SIP!")
+            # A fresh connection does not count as lost. Without this the
+            # health monitor saw nothing to repair after three failed attempts
+            # and never tried again — no doorbell until Home Assistant restarted.
+            self._siedle_conn.stop()
             return False
     
     def _reconnect_external(self):
@@ -2496,6 +2499,7 @@ class SipCallManager:
             return True
         else:
             _LOGGER.error("Failed to reconnect to external SIP!")
+            self._external_conn.stop()  # keep it marked as lost, see _reconnect_siedle
             return False
     
     def _health_monitor_loop(self):

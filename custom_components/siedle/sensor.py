@@ -12,6 +12,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN,
@@ -312,7 +313,8 @@ class SiedleLastRecordingSensor(SiedleSensorBase):
     def update_recording(self, filepath: str):
         """Update with new recording."""
         self._last_recording_path = filepath
-        self._last_recording_time = datetime.now()
+        # A TIMESTAMP sensor rejects a datetime without a time zone
+        self._last_recording_time = dt_util.now()
         # Schedule state update in HA event loop (thread-safe)
         if self._hass:
             self._hass.loop.call_soon_threadsafe(self.async_write_ha_state)

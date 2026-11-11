@@ -21,6 +21,11 @@ TO_REDACT_DATA = {
     "endpointSetupKey",
     "access_token",
     "refresh_token",
+    # setup_info holds the setup key and the transfer secret; together with
+    # setup_data they yield the shared secret that signs "open door".
+    "setup_info",
+    "setup_data",
+    "endpointTransferSecret",
 }
 
 TO_REDACT_OPTIONS = {
@@ -31,6 +36,11 @@ TO_REDACT_OPTIONS = {
 } | {
     "ext_sip_password",
     "fritzbox_password",
+    "ext_sip_username",
+    "forward_to_number",
+    "forward_from_number",
+    "fritzbox_user",
+    "fritzbox_phone_number",
 }
 
 

@@ -183,7 +183,7 @@ class Siedle:
             # Try without unpadding (some implementations don't pad)
             decrypted = decrypted_padded.rstrip(b'\x00')
         
-        _LOGGER.debug(f"Decrypted sharedSecret: {decrypted.hex()} ({len(decrypted)} bytes)")
+        _LOGGER.debug(f"Decrypted sharedSecret ({len(decrypted)} bytes)")
         return decrypted
 
 
@@ -211,7 +211,8 @@ class Siedle:
             json={
                 "type": "IOS_APP"
             }, 
-            headers=headers
+            headers=headers,
+            timeout=30
         )
         
         # Check HTTP status (200 OK or 201 Created)
@@ -226,7 +227,8 @@ class Siedle:
             raise
         
         # Log response for debugging
-        _LOGGER.debug(f"API Response: {response}")
+        # The response carries the endpoint password — log the field names only
+        _LOGGER.debug(f"API Response fields: {sorted(response)}")
         
         # Check for required fields
         if "id" not in response:
@@ -275,10 +277,10 @@ class Siedle:
                     "password": password,
                     "client_id": client_id
                 },
-                headers=headersOauth
+                headers=headersOauth,
+                timeout=30
             )
             _LOGGER.debug(f"OAuth Response Status: {oauth_response.status_code}")
-            _LOGGER.debug(f"OAuth Response Body: {oauth_response.text}")
             
             if oauth_response.status_code == 200:
                 self._token = oauth_response.json()
@@ -392,7 +394,6 @@ class Siedle:
         
         _LOGGER.debug(f"Signature input: action={action}, connectionId={self._endpoint_id}, timestamp={timestamp}, contactId={contact_id}")
         _LOGGER.debug(f"Signature message: {message}")
-        _LOGGER.debug(f"Secret bytes (first 8): {secret_bytes[:8].hex() if len(secret_bytes) >= 8 else secret_bytes.hex()}")
         
         # HMAC-SHA256 signature
         signature = hmac.new(
@@ -400,8 +401,6 @@ class Siedle:
             message.encode('utf-8'),
             hashlib.sha256
         ).hexdigest()
-        
-        _LOGGER.debug(f"Generated signature: {signature}")
         
         return {
             "timestamp": timestamp,
@@ -433,6 +432,9 @@ class Siedle:
                 except Exception as refresh_err:
                     self._note_auth_failure(refresh_err)
                     raise
+            # Any other HTTP error must reach the caller. Falling through
+            # returned None, and "open door" reported success on a 403/500.
+            raise
         except requests.exceptions.RequestException as e:
             _LOGGER.error("Error Siedle API: %s" % e)
             raise
@@ -464,6 +466,9 @@ class Siedle:
                 except Exception as refresh_err:
                     self._note_auth_failure(refresh_err)
                     raise
+            # Any other HTTP error must reach the caller. Falling through
+            # returned None, and "open door" reported success on a 403/500.
+            raise
         except requests.exceptions.RequestException as e:
             _LOGGER.error("Error Siedle API: %s with data: %s" % (e, data))
             raise
@@ -494,6 +499,9 @@ class Siedle:
                 except Exception as refresh_err:
                     self._note_auth_failure(refresh_err)
                     raise
+            # Any other HTTP error must reach the caller. Falling through
+            # returned None, and "open door" reported success on a 403/500.
+            raise
         except requests.exceptions.RequestException as e:
             _LOGGER.error("Error Siedle API: %s", e)
             raise
@@ -582,7 +590,7 @@ class Siedle:
         except Exception as e:
             _LOGGER.error(f"All activation attempts failed. Last error: {e}")
             _LOGGER.info("The endpoint might already be activated, or activation requires a different method.")
-            _LOGGER.info(f"TransferSecret available: {self._transferSecret[:20]}...")
+            _LOGGER.info(f"TransferSecret available: ({len(self._transferSecret)} chars)")
             raise
 
     def get_config(self):

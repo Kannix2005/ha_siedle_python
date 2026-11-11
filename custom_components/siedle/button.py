@@ -3,6 +3,7 @@ import logging
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -73,7 +74,10 @@ class SiedleDoorOpenerButton(SiedleButtonBase):
     async def async_press(self) -> None:
         """Handle button press."""
         _LOGGER.info("Door opener button pressed")
-        await self.hass.async_add_executor_job(self._api.openDoor)
+        try:
+            await self.hass.async_add_executor_job(self._api.openDoor)
+        except Exception as err:
+            raise HomeAssistantError(f"Opening the door failed: {err}") from err
 
 
 class SiedleLightButton(SiedleButtonBase):
@@ -91,7 +95,10 @@ class SiedleLightButton(SiedleButtonBase):
     async def async_press(self) -> None:
         """Handle button press."""
         _LOGGER.info("Door light button pressed")
-        await self.hass.async_add_executor_job(self._api.turnOnLight)
+        try:
+            await self.hass.async_add_executor_job(self._api.turnOnLight)
+        except Exception as err:
+            raise HomeAssistantError(f"Switching the light failed: {err}") from err
 
 
 class SiedleHangupButton(SiedleButtonBase):

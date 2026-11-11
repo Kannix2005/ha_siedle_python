@@ -92,37 +92,48 @@ Or manually in HACS:
 ### Step 4: Configure Options
 
 After successful setup, you can configure the following in the integration options:
-- **Automatic Recording**: Records door conversations as WAV
-- **FCM Push**: Doorbell detection (enabled by default)
-- **External SIP Server**: Call forwarding to FritzBox, Asterisk & Co.
-- **Call Forwarding**: Forward doorbell to external SIP phone with bidirectional audio
+- **Recording**: Records door conversations as WAV, call history size
+- **General**: FCM push, device name, MQTT and SIP on/off
+- **External SIP Server**: Call forwarding to FRITZ!Box, Asterisk & Co.
+- **Call Forwarding**: Forward doorbell to external SIP phone with bidirectional audio (targets, timeout, auto-answer)
+- **Forwarding Schedule**: Forward only at certain times/weekdays
+- **DTMF Door Opener**: Open the door / switch the light by keypress during a call
+- **Wait Announcement** and **FRITZ!Box Integration**
 
 ---
 
 ## Entities
 
+All entities belong to one device named `Siedle <first 8 characters of the endpoint ID>` (except the camera, which has no device). The entity names are fixed German names set in the code (not translated). Home Assistant builds the entity ID from the device name and the entity name, so the exact IDs depend on your installation — look them up under **Settings → Devices & Services → Siedle → Devices**. The tables below therefore list entity names, not IDs.
+
 ### Binary Sensors
-| Entity | Description |
-|--------|-------------|
-| `binary_sensor.siedle_doorbell` | Briefly turns "on" when doorbell is pressed (5 sec.) |
-| `binary_sensor.siedle_mqtt_connection` | MQTT connection status to Siedle server |
-| `binary_sensor.siedle_fcm_push_connection` | FCM push connection status |
-| `binary_sensor.siedle_door_contact_*` | Availability of individual door contacts |
+| Entity name | Description |
+|-------------|-------------|
+| Türklingel | Briefly turns "on" (5 sec.) when the doorbell is pressed (reacts to the `siedle_doorbell` event, FCM doorbell events and MQTT topics that look like a doorbell) |
+| MQTT Verbindung | MQTT connection status to Siedle server |
+| FCM Push Verbindung | FCM push connection status |
+| Türkontakt `<call number>` | One per door contact: "on" if the contact has a door opener. Attributes: `contact_id`, `call_number`, `callable`, `has_camera`, `has_door_opener`, `has_door_light` |
 
 ### Sensors
-| Entity | Description |
-|--------|-------------|
-| `sensor.siedle_call_status` | Current status: Ready / Ringing / Connected / Recording |
-| `sensor.siedle_sip_status` | SIP registration status (Siedle + external if configured) |
-| `sensor.siedle_mqtt_status` | MQTT connection status as text |
-| `sensor.siedle_last_recording` | Timestamp and path of last recording |
+| Entity name | Description |
+|-------------|-------------|
+| Anrufstatus | Current call status: `Bereit` (idle) / `Verbunden` (connected) / `Aufnahme` (recording); other internal states (`ringing_in`, `ringing_out`, `ending`) are shown as raw text. Only with SIP enabled. Attributes: `call_active` plus data of the last state change |
+| SIP Status | `Beide verbunden` / `Siedle verbunden` / `Extern verbunden` / `Getrennt`. Attributes: `siedle_sip_registered`, `external_sip_registered` |
+| MQTT Status | `Verbunden` / `Getrennt`. Attribute: `mqtt_connected` |
+| Letzte Aufnahme | Timestamp of the last recording. Attributes: `filepath`, `filesize`, `media_url` (only for paths below `www/`) |
+| Anruf-Historie | Number of stored calls. Attributes: `total_calls`, `calls_today`, `last_calls` (last 10, newest first: `timestamp`, `from`, `caller_id`, `call_id`, `source`, `answered`, `duration_seconds`, `recording_file`, `dtmf_door_opened`), `active_call` |
 
 ### Buttons
-| Entity | Description |
-|--------|-------------|
-| `button.siedle_door_opener` | Open door |
-| `button.siedle_door_light` | Turn on door light |
-| `button.siedle_hangup` | End active call |
+| Entity name | Description |
+|-------------|-------------|
+| Tür öffnen | Open door |
+| Licht | Turn on door light |
+| Auflegen | End active call (only with SIP enabled) |
+
+### Camera
+| Entity name | Description |
+|-------------|-------------|
+| Türstation Kamera | Placeholder only: no video stream and, at the moment, no image is ever delivered |
 
 ---
 
@@ -135,19 +146,22 @@ Via **Settings → Devices & Services → Siedle → Configure**:
 | Option | Default | Description |
 |--------|---------|-------------|
 | Enabled | Off | Automatic recording on doorbell |
-| Max. Duration | 30 sec. | Maximum recording duration |
-| Storage Path | `www/siedle_recordings` | Directory for WAV files |
+| Max. Duration | 30 sec. | Maximum recording duration (5–300 sec.) |
+| Storage Path | `www/siedle_recordings` | Directory for WAV files (relative to the HA config folder) |
+| Call History Size | 50 | Number of calls kept by the *Anruf-Historie* sensor (10–500) |
 
 > ⚠️ **Note:** Recording conversations at the door may be legally problematic. Please ensure you comply with local privacy laws (e.g., GDPR, data protection laws).
 
 When recording is enabled, the call is automatically answered (Auto-Answer), audio data is received via SRTP, decrypted, and saved as a WAV file. After the recording duration expires, the call is automatically ended (Auto-Hangup).
 
-### FCM Push Notifications
+### General / FCM Push Notifications
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | Enabled | On | FCM-based doorbell detection |
 | Device Name | HA Location Name | Name displayed in Siedle app |
+| MQTT | On | MQTT connection for device status |
+| SIP | On | SIP registration for doorbell detection and call handling (without it there are no call status/hangup entities and no forwarding) |
 
 FCM is the **primary and most reliable method** for doorbell detection. The integration emulates an Android device and receives Firebase Cloud Messages directly.
 
@@ -159,47 +173,127 @@ FCM is the **primary and most reliable method** for doorbell detection. The inte
 |--------|---------|-------------|
 | Enabled | Off | Enable external SIP server for call forwarding |
 | Host | — | IP or hostname (e.g., `192.168.178.1` for FritzBox) |
-| Port | 5060 | SIP port |
+| Port | 5060 | SIP port (1–65535) |
 | Username | — | SIP username for REGISTER |
 | Password | — | SIP password |
 | Transport | UDP | UDP, TCP, or TLS |
+
+Servers that require a digest login for the forwarded call (`401`/`407`, e.g. a FRITZ!Box set up as IP door intercom) are supported since 3.1.5.
 
 ### Call Forwarding
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | Enabled | Off | Forwarding on doorbell |
-| Target Number | — | e.g., `**9` (FritzBox broadcast) |
-| Caller ID | — | CallerID for external phone |
+| Target Number | — | e.g., `**9` (FritzBox broadcast); several targets comma-separated (e.g. `**620,**621`), tried one after another |
+| Allowed Caller Number | — | Filter for calls **from** the external SIP server **to** the door: an incoming call is only accepted if this number is contained in its From header, otherwise it is rejected with `403`. Empty = accept every caller. Nothing is sent as a caller ID. |
+| Timeout | 30 sec. | Ring time per target before the next one is tried (5–120 sec.) |
 | Auto-Answer | Off | Automatically answer door station |
+
+### Forwarding Schedule
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| Enabled | Off | Forward only within the schedule (otherwise always, when forwarding is enabled) |
+| Start / End | `00:00` / `23:59` | Time range `HH:MM`; a range across midnight (e.g. `22:00`–`06:00`) is supported |
+| Active Days | Mon–Sun | Weekdays on which forwarding is active |
+
+### DTMF Door Opener
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| Enabled | Off | Evaluate key presses during a forwarded call |
+| Door Code | `#` | Code that opens the door (single key or sequence, e.g. `1234#`) |
+| Light Code | `*` | Code that switches the door light (e.g. `*` or `56*`) |
+
+Key presses are recognized both as RFC 4733 telephone events in the RTP stream and as SIP INFO (`application/dtmf-relay`, `application/dtmf`), which the FRITZ!Box uses. A key reported on both paths counts once. Multi-key codes are evaluated after a 3-second pause in typing; the entered sequence must end with the code. Every executed action fires the `siedle_dtmf_action` event.
+
+### Wait Announcement
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| Enabled | Off | Play a "please wait" announcement |
+| WAV File | empty | Path to a WAV file (8 kHz, 16-bit, mono); empty = built-in beep |
+
+> ℹ️ The option is saved, but the current code does not play the announcement yet (nothing calls the playback function).
+
+### FRITZ!Box Integration
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| Enabled | Off | Ring a FRITZ!Box phone via TR-064 on doorbell (rings for 30 sec., then hangs up) |
+| Host | `fritz.box` | FRITZ!Box address |
+| Username | `admin` | FRITZ!Box user (needs "Phone" permission) |
+| Password | — | FRITZ!Box password |
+| Number to dial | — | e.g. `**9` (all phones), `**610` (DECT 1) |
 
 ---
 
 ## Events
 
-The integration fires the following HA events that can be used in automations:
+The integration fires the following HA events that can be used in automations. `entry_id` is always the config entry of the sending door station.
 
 ```yaml
-# On every Siedle event (FCM, MQTT, SIP)
-event_type: siedle_event
-data:
-  type: "fcm" | "mqtt" | "sip"
-  event_type: "doorbell"
-  entry_id: "..."
-
-# Specifically on doorbell
+# Doorbell (SIP INVITE from Siedle)
 event_type: siedle_doorbell
 data:
-  source: "sip" | "fcm"
+  source: "sip"
+  from: "..."          # From header of the INVITE
+  call_id: "..."
+  caller_id: "..."     # user part of the From URI
+  caller_host: "..."
+  button: "default"
   entry_id: "..."
 
-# On call state changes
+# Doorbell (FCM push)
+event_type: siedle_doorbell
+data:
+  call_id: "..."
+  callee: "..."
+  timestamp: "..."
+  type: "CALL"
+  entry_id: "..."
+
+# Generic event: FCM
+event_type: siedle_event
+data:
+  type: "fcm"
+  event_type: "doorbell"          # other FCM message types: their lowercase name
+  call_id: "..."                  # call_id, callee, timestamp only for "doorbell"
+  callee: "..."
+  timestamp: "..."
+  raw: { ... }                    # raw FCM data
+  entry_id: "..."
+
+# Generic event: MQTT
+event_type: siedle_event
+data:
+  type: "mqtt"
+  topic: "..."
+  payload: { ... }
+  entry_id: "..."
+
+# Call state changes
 event_type: siedle_call_state
 data:
-  state: "idle" | "ringing" | "connected" | "recording"
+  state: "idle" | "ringing_in" | "ringing_out" | "connected" | "recording" | "ending"
   data: { ... }
   entry_id: "..."
+
+# DTMF action executed (only if the DTMF door opener is enabled)
+event_type: siedle_dtmf_action
+data:
+  action: "open_door" | "toggle_light"
+  code: "#"
+  entry_id: "..."
+
+# Further FCM events
+event_type: siedle_call_ended          # call_id, timestamp, type: "CANCEL_CALL", entry_id
+event_type: siedle_fcm_connected       # status: "connected", entry_id
+event_type: siedle_fcm_disconnected    # status: "disconnected", entry_id
 ```
+
+> Only if the legacy SIP listener is used as a fallback, `siedle_event` is additionally fired with `type: "sip"` (`event_type`, `from`, `call_id`) and `siedle_doorbell` carries only `source`, `from`, `call_id`, `entry_id`.
 
 ### Automation Example
 
@@ -207,8 +301,8 @@ data:
 automation:
   - alias: "Doorbell Notification"
     trigger:
-      - platform: state
-        entity_id: binary_sensor.siedle_doorbell
+      - trigger: state
+        entity_id: binary_sensor.<your_doorbell_entity>  # the "Türklingel" entity, ID: see Settings → Devices
         to: "on"
     action:
       - action: notify.mobile_app
@@ -224,12 +318,15 @@ automation:
 
 ## Services
 
-| Service | Description |
-|---------|-------------|
-| `siedle.open_door` | Opens the door (optional: `contact_id`) |
-| `siedle.toggle_light` | Toggles door light (optional: `contact_id`) |
-| `siedle.hangup_call` | Ends active call |
-| `siedle.activate_endpoint` | Activate endpoint — press doorbell! |
+| Service | Fields | Description |
+|---------|--------|-------------|
+| `siedle.open_door` | `contact_id` (optional) | Opens the door |
+| `siedle.toggle_light` | `contact_id` (optional) | Toggles door light |
+| `siedle.hangup_call` | — | Ends the active call (doorbell or external) |
+| `siedle.activate_endpoint` | — | Activate endpoint — press doorbell! |
+| `siedle.call_door` | `contact_id` (optional) | **Experimental**, audio only: starts a call to the door station without waiting for a doorbell press |
+
+With several Siedle entries, `contact_id` selects the right door station: the service uses the entry whose door contacts contain that ID (the ID is the `contact_id` attribute of the *Türkontakt* binary sensor). Without `contact_id`, or if no entry knows it, the first loaded entry is used. `activate_endpoint` always uses the first loaded entry; `hangup_call` ends the first active call it finds.
 
 ---
 
@@ -305,6 +402,8 @@ logger:
     custom_components.siedle.rtp_handler: debug
     custom_components.siedle.srtp_handler: debug
     custom_components.siedle.fcm_handler: debug
+    custom_components.siedle.fcm_transport: debug
+    custom_components.siedle.siedle_api: debug
 ```
 
 ### Common Issues

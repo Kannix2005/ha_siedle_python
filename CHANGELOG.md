@@ -5,6 +5,27 @@ Alle wichtigen Änderungen an diesem Projekt werden hier dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [3.1.6] - 2026-11-12
+
+### Behoben
+- **Nach einer längeren Unterbrechung blieb die Türklingel bis zum Neustart von Home Assistant stumm.** Scheiterten drei Reconnect-Versuche (Router-Neustart, Internetausfall), hielt der Health-Monitor die zuletzt angelegte, nie registrierte Verbindung für gesund und versuchte es nicht wieder. Eine gescheiterte Verbindung bleibt jetzt als verloren markiert, sodass weiter versucht wird. Dasselbe gilt für einen externen SIP-Server, der beim Start nicht erreichbar war — bisher blieb die Weiterleitung dann dauerhaft aus.
+- **„Tür öffnen" meldete Erfolg, obwohl der Siedle-Server ablehnte.** Antwortete die API mit einem Fehler wie `403` oder `500`, wurde das nur protokolliert; Button, Dienst und DTMF-Türöffner galten als erfolgreich. Solche Fehler werden jetzt weitergereicht, und die Buttons zeigen sie in der Oberfläche an.
+- **Eine zweite Aufnahme wurde vorzeitig beendet.** Klingelte es innerhalb der eingestellten Aufnahmedauer erneut, stoppte der Timer der ersten Aufnahme die zweite und legte das neue Gespräch auf.
+- **Anrufe vom externen SIP-Server zur Tür blieben unbeantwortet.** Diese Richtung ist nicht umgesetzt; ein solcher Anruf überschrieb aber ein laufendes weitergeleitetes Gespräch und ließ den Anrufstatus auf „klingelt" hängen. Er wird jetzt mit `603 Decline` abgelehnt, ohne den Zustand anzufassen.
+- **Abgebrochenes Setup hinterließ laufende Verbindungen.** Ein Fehler beim MQTT-Verbindungsaufbau brach das Setup ab, nachdem SIP bereits lief; beim nächsten Versuch lief alles doppelt. MQTT-Fehler brechen das Setup nicht mehr ab, eine gescheiterte SIP-Anmeldung wird sauber geschlossen, und beim Entladen verhindert ein Fehler in einem Schritt nicht mehr die übrigen.
+- Der Sensor „Letzte Aufnahme" übergab einen Zeitstempel ohne Zeitzone, den Home Assistant bei einem Zeitstempel-Sensor nicht annimmt.
+- Zwei Anfragen an die Siedle-Server bei der Einrichtung hatten kein Zeitlimit und konnten endlos hängen.
+
+### Sicherheit
+- **Keine Geheimnisse mehr im Debug-Log**: Das entschlüsselte Shared Secret, die Antwort der Endpoint-Registrierung (mit Passwort), die OAuth-Antwort (mit Tokens) und die Signatur der Türöffner-Anfrage wurden auf Debug-Ebene ausgeschrieben — Debug-Logs landen regelmäßig in öffentlichen Issues.
+- **Diagnose-Dumps schwärzen jetzt auch `setup_info` und `setup_data`** (daraus lässt sich das Shared Secret ableiten) sowie Benutzernamen und Rufnummern in den Optionen.
+- Die alte eigenständige QR-Scanner-Seite `index.html` im Repository entfernt. Sie wurde seit 2.0 nicht mehr benutzt und übernahm die Callback-URL noch ungeprüft aus der Adresse.
+
+### Geändert
+- README (deutsch und englisch) an den Code angeglichen: Entitäten mit ihren tatsächlichen Namen, alle acht Optionsseiten mit Standardwerten und Grenzen, der Dienst `call_door`, die Felder der Ereignisse. „Absendernummer" ist in Wahrheit ein Filter für Anrufe vom externen SIP-Server und entsprechend beschrieben.
+- Übersetzungen vervollständigt: Die englische Fassung hatte keine Texte für die Dienste, `call_door` fehlte überall.
+- `requirements.txt` entspricht wieder dem Manifest.
+
 ## [3.1.5] - 2026-11-11
 
 ### Behoben

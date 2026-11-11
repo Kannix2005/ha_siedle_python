@@ -42,9 +42,10 @@
         "title": "General Settings",
         "description": "Configure basic integration settings.",
         "data": {
+          "fcm_enabled": "Enable FCM Push (recommended for doorbell detection!)",
+          "fcm_device_name": "Device name (shown in Siedle App)",
           "enable_mqtt": "Enable MQTT for device status",
-          "enable_sip": "Enable SIP for doorbell detection",
-          "enable_fcm": "Enable FCM push notifications (experimental)"
+          "enable_sip": "Enable SIP for doorbell detection"
         }
       },
       "external_sip": {
@@ -136,6 +137,10 @@
     "activate_endpoint": {
       "name": "Activate Endpoint",
       "description": "Activates/pairs the endpoint with the door station."
+    },
+    "call_door": {
+      "name": "Call Door Station",
+      "description": "Starts a call to the door station without waiting for a doorbell press. Experimental, audio only."
     }
   }
 }

@@ -137,6 +137,10 @@
     "activate_endpoint": {
       "name": "Endpoint aktivieren",
       "description": "Aktiviert/koppelt den Endpoint mit der Türstation."
+    },
+    "call_door": {
+      "name": "Türstation anrufen",
+      "description": "Startet einen Anruf zur Türstation, ohne auf einen Klingeldruck zu warten. Experimentell, nur Audio."
     }
   }
 }

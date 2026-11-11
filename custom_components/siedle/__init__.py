@@ -329,6 +329,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     async_dispatcher_send(hass, SIGNAL_SIEDLE_CONNECTION_UPDATE)
                 else:
                     _LOGGER.warning("SIP Call Manager failed to start - falling back to legacy SIP listener")
+                    # Close the half-open connection of the failed start
+                    await hass.async_add_executor_job(sip_manager.stop)
                     sip_manager = None
                     # Fallback to old SIP listener
                     await hass.async_add_executor_job(
@@ -360,10 +362,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     # Start MQTT if enabled (for device status)
     if entry.options.get("enable_mqtt", True):
-        await hass.async_add_executor_job(
-            siedle.connect_mqtt, 
-            lambda topic, payload: _mqtt_callback(hass, entry, topic, payload)
-        )
+        # MQTT only carries device status. A failure here must not abort the
+        # setup: SIP is already running by now and would be started a second
+        # time on the next attempt.
+        try:
+            await hass.async_add_executor_job(
+                siedle.connect_mqtt, 
+                lambda topic, payload: _mqtt_callback(hass, entry, topic, payload)
+            )
+        except Exception as e:
+            _LOGGER.warning("MQTT connection failed, continuing without device status: %s", e)
         # Notify sensors that MQTT connection state may have changed
         async_dispatcher_send(hass, SIGNAL_SIEDLE_CONNECTION_UPDATE)
 
@@ -468,32 +476,27 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
         sip_manager = data.get("sip_manager")
         rtp_bridge = data.get("rtp_bridge")
         
-        # Stop SIP Call Manager
-        if sip_manager:
-            await hass.async_add_executor_job(sip_manager.stop)
-        
-        # Stop RTP Bridge
-        if rtp_bridge:
-            await hass.async_add_executor_job(rtp_bridge.stop)
-        
-        # Stop FCM Handler
         fcm_handler = data.get("fcm_handler")
-        if fcm_handler:
-            await fcm_handler.async_stop()
-        
-        # Close Fritz!Box session (F13)
         fritzbox_dialer = data.get("fritzbox_dialer")
-        if fritzbox_dialer:
-            await fritzbox_dialer.close()
-        
-        # Disconnect MQTT
-        await hass.async_add_executor_job(api.disconnect_mqtt)
-        
-        # Stop legacy SIP listener (if used)
-        await hass.async_add_executor_job(api.stop_sip_listener)
-        
-        # Stop legacy FCM listener (if used)
-        await hass.async_add_executor_job(api.stop_fcm_listener)
+
+        # One failing step must not keep the others from running — whatever
+        # is left behind keeps its threads and sockets until HA restarts.
+        steps = [
+            ("SIP Call Manager", sip_manager and (lambda: hass.async_add_executor_job(sip_manager.stop))),
+            ("RTP Bridge", rtp_bridge and (lambda: hass.async_add_executor_job(rtp_bridge.stop))),
+            ("FCM Handler", fcm_handler and fcm_handler.async_stop),
+            ("Fritz!Box session", fritzbox_dialer and fritzbox_dialer.close),
+            ("MQTT", lambda: hass.async_add_executor_job(api.disconnect_mqtt)),
+            ("legacy SIP listener", lambda: hass.async_add_executor_job(api.stop_sip_listener)),
+            ("legacy FCM listener", lambda: hass.async_add_executor_job(api.stop_fcm_listener)),
+        ]
+        for name, stop in steps:
+            if not stop:
+                continue
+            try:
+                await stop()
+            except Exception as e:
+                _LOGGER.warning("Error stopping %s during unload: %s", name, e)
         
         hass.data[DOMAIN].pop(entry.entry_id)
 

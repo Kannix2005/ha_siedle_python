@@ -1,8 +1,8 @@
 # Siedle Python Integration - Requirements
 # (muss mit manifest.json übereinstimmen)
+# requests und cryptography bringt Home Assistant selbst mit und stehen
+# deshalb nicht im Manifest (siehe CHANGELOG 3.1.4).
 
-# Core dependencies
-requests>=2.25.0
 requests-oauthlib>=1.3.0
 
 # AES decryption for setupData (REQUIRED for door/light control!)
@@ -10,6 +10,3 @@ pycryptodome>=3.10.0
 
 # Firebase Cloud Messaging for doorbell push detection
 fcm-receiver==0.1.1
-
-# SRTP key derivation & TLS
-cryptography>=41.0.0

@@ -26,6 +26,7 @@
     "step": {
       "init": {
         "title": "Siedle Options",
+        "description": "Configure the Siedle integration options.",
         "menu_options": {
           "general": "General Settings",
           "external_sip": "External SIP Server",
@@ -118,6 +119,28 @@
           "fritzbox_phone_number": "Number to dial (e.g., **9)"
         }
       }
+    }
+  },
+  "services": {
+    "open_door": {
+      "name": "Open Door",
+      "description": "Opens the door lock."
+    },
+    "toggle_light": {
+      "name": "Toggle Light",
+      "description": "Toggles the door light."
+    },
+    "hangup_call": {
+      "name": "Hang Up",
+      "description": "Ends the active call."
+    },
+    "activate_endpoint": {
+      "name": "Activate Endpoint",
+      "description": "Activates/pairs the endpoint with the door station."
+    },
+    "call_door": {
+      "name": "Call Door Station",
+      "description": "Starts a call to the door station without waiting for a doorbell press. Experimental, audio only."
     }
   }
 }

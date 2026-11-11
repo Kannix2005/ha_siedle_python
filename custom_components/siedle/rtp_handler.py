@@ -1229,9 +1229,14 @@ class RtpBridge:
         
         # Auto-stop after duration if specified
         if duration:
+            recorder = self._recorder
+            
             def stop_after_duration():
                 time.sleep(duration)
-                if self._recorder and self._recorder.is_recording:
+                # Only stop the recording this timer was started for. A second
+                # doorbell within the duration starts a new recording, and the
+                # old timer used to cut that one short and hang up the call.
+                if self._recorder is recorder and recorder.is_recording:
                     self.stop_recording()
                     # Notify that recording has stopped (for auto-hangup)
                     if self._on_recording_stopped:
