@@ -866,22 +866,26 @@ class SipConnection:
         TCP and TLS deliver a byte stream: one recv() may hold half a message
         or several. The end of a message is the blank line after the headers
         plus Content-Length bytes of body (RFC 3261 §18.3).
+
+        Raises ConnectionAbortedError if the stream cannot be framed.
         """
         buf = self._rx_buffer.lstrip(b"\r\n")  # keepalive CRLFs between messages
         self._rx_buffer = buf
         end = buf.find(b"\r\n\r\n")
         if end < 0:
             if len(buf) > self.MAX_RX_BUFFER:
-                _LOGGER.warning("%s: Dropping %d bytes without SIP message boundary", self.name, len(buf))
                 self._rx_buffer = b""
+                raise ConnectionAbortedError(f"{len(buf)} bytes without SIP message boundary")
             return None
         length = re.search(rb"(?im)^(?:Content-Length|l)[ \t]*:[ \t]*(\d+)", buf[:end])
         total = end + 4 + (int(length.group(1)) if length else 0)
         if total > self.MAX_RX_BUFFER:
-            # Never buffer towards a size the peer merely announced.
-            _LOGGER.warning("%s: Dropping SIP message announcing %d bytes", self.name, total)
+            # Never buffer towards a size the peer merely announced. The
+            # stream cannot be resynchronised either: the body bytes that
+            # follow would be parsed as messages. Give up the connection;
+            # the health monitor reconnects.
             self._rx_buffer = b""
-            return None
+            raise ConnectionAbortedError(f"SIP message announces {total} bytes")
         if len(buf) < total:
             return None
         self._rx_buffer = buf[total:]

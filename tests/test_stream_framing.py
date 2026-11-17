@@ -70,12 +70,18 @@ class StreamFramingTest(unittest.TestCase):
         msgs = drain(connection([b"\r\n\r\n" + BYE[:20], BYE[20:]]))
         self.assertEqual([m.method for m in msgs], ["BYE"])
 
-    def test_announced_oversized_body_is_not_buffered(self):
+    def test_announced_oversized_body_gives_up_the_connection(self):
+        # Skipping ahead is not safe: the body bytes would be read as messages.
         huge = b"MESSAGE sip:tuer@10.10.10.3 SIP/2.0\r\nCall-ID: x\r\nContent-Length: 99999999\r\n\r\n"
-        conn = connection([huge, b"A" * 4096, BYE])
-        msgs = drain(conn)
-        self.assertLessEqual(len(conn._rx_buffer), conn.MAX_RX_BUFFER)
-        self.assertNotIn("MESSAGE", [m.method for m in msgs])
+        conn = connection([huge + BYE])
+        self.assertIsNone(conn.recv())
+        self.assertTrue(conn._connection_lost)
+        self.assertEqual(conn._rx_buffer, b"")
+
+    def test_stream_without_boundary_gives_up_the_connection(self):
+        conn = connection([b"A" * (sm.SipConnection.MAX_RX_BUFFER + 1)])
+        self.assertIsNone(conn.recv())
+        self.assertTrue(conn._connection_lost)
 
     def test_udp_datagrams_are_parsed_as_they_arrive(self):
         msgs = drain(connection([BYE], transport=sm.SipTransport.UDP))
