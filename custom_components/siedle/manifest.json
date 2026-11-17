@@ -15,7 +15,8 @@
   "requirements": [
     "requests-oauthlib>=1.3.0",
     "pycryptodome>=3.10.0",
+    "paho-mqtt>=2.1.0",
     "fcm-receiver==0.1.1"
   ],
-  "version": "3.1.6"
+  "version": "3.1.7"
 }

@@ -152,8 +152,7 @@ def pcmu_to_linear(pcmu_data: bytes) -> bytes:
     
     result = bytearray()
     for byte in pcmu_data:
-        # Invert all bits (μ-law storage format)
-        sample = ULAW_TABLE[byte ^ 0xFF]
+        sample = ULAW_TABLE[byte]
         result.extend(struct.pack("<h", sample))
     return bytes(result)
 
@@ -197,10 +196,20 @@ def pcma_to_linear(pcma_data: bytes) -> bytes:
     
     result = bytearray()
     for byte in pcma_data:
-        # A-law uses XOR with 0x55
-        sample = ALAW_TABLE[byte ^ 0x55]
+        sample = ALAW_TABLE[byte]
         result.extend(struct.pack("<h", sample))
     return bytes(result)
+
+
+def peak_level(payload_type: int, payload: bytes) -> int:
+    """Largest absolute sample (0..32767) of a G.711 payload, 0 for other codecs."""
+    if payload_type == 8:
+        pcm = pcma_to_linear(payload)
+    elif payload_type == 0:
+        pcm = pcmu_to_linear(payload)
+    else:
+        return 0
+    return max((abs(v) for (v,) in struct.iter_unpack("<h", pcm)), default=0)
 
 
 def linear_to_pcma(pcm_data: bytes) -> bytes:
@@ -949,8 +958,10 @@ class RtpBridge:
             self._thread_b_to_a.start()
         
         # Start keepalive thread to send continuous RTP silence to Siedle
-        # This keeps the NAT pinhole open and signals we're an active endpoint
-        if self._remote_a:
+        # This keeps the NAT pinhole open and signals we're an active endpoint.
+        # While bridging, the phone's audio does that; silence on top of it
+        # would be a second stream fighting the real one.
+        if self._remote_a and not self._remote_b:
             self._thread_keepalive = threading.Thread(target=self._send_keepalive, daemon=True)
             self._thread_keepalive.start()
         
@@ -1048,8 +1059,11 @@ class RtpBridge:
                 )
                 silence = bytes([0xD5] * 160)  # A-law silence, 20ms at 8kHz
                 packet = rtp_header + silence
+                if self._srtp_encrypt:
+                    packet = self._srtp_encrypt.encrypt_rtp(packet)
                 
-                self._socket_a.sendto(packet, self._remote_a)
+                if packet:
+                    self._socket_a.sendto(packet, self._remote_a)
                 
                 seq += 1
                 ts += 160  # 160 samples = 20ms at 8kHz
@@ -1077,7 +1091,9 @@ class RtpBridge:
         
         packet_count = 0
         decryption_errors = 0
+        peak = 0
         last_log_time = time.time()
+        last_peak_time = last_log_time
         timeout_warning_shown = False
         
         while self._running:
@@ -1109,8 +1125,15 @@ class RtpBridge:
                         self._packets_a_to_b += 1
                         packet_count += 1
                         
-                        # Log every 10 seconds
                         current_time = time.time()
+                        if _LOGGER.isEnabledFor(logging.DEBUG):
+                            peak = max(peak, peak_level(packet.payload_type, packet.payload))
+                            if current_time - last_peak_time >= 2.0:
+                                _LOGGER.debug("RTP A->B audio peak level (0-32767): %d", peak)
+                                peak = 0
+                                last_peak_time = current_time
+
+                        # Log every 10 seconds
                         if current_time - last_log_time >= 10.0:
                             _LOGGER.info(f"RTP: {packet_count} packets received, recording={self._recorder is not None}, decryption_errors={decryption_errors}")
                             last_log_time = current_time
@@ -1158,6 +1181,8 @@ class RtpBridge:
         
         packet_count = 0
         encryption_errors = 0
+        peak = 0
+        last_log_time = time.time()
         
         while self._running:
             try:
@@ -1179,6 +1204,13 @@ class RtpBridge:
                             # Don't forward DTMF event packets to Siedle
                             continue
                         
+                        if _LOGGER.isEnabledFor(logging.DEBUG):
+                            peak = max(peak, peak_level(packet.payload_type, packet.payload))
+                            if time.time() - last_log_time >= 2.0:
+                                _LOGGER.debug("RTP B->A audio peak level (0-32767): %d", peak)
+                                peak = 0
+                                last_log_time = time.time()
+
                         # Forward to A (Siedle)
                         if self._remote_a and self._socket_a:
                             if self._srtp_encrypt:

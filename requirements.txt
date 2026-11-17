@@ -10,3 +10,6 @@ pycryptodome>=3.10.0
 
 # Firebase Cloud Messaging for doorbell push detection
 fcm-receiver==0.1.1
+
+# MQTT client for tile state and door events
+paho-mqtt>=2.1.0

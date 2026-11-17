@@ -27,7 +27,7 @@ class SRTPCrypto:
         """
         self.master_key = master_key
         self.master_salt = master_salt
-        self._session_keys = {}
+        self._session_keys: Tuple[bytes, bytes, bytes] = ()
         # Rollover counter per SSRC, keeps the CTR keystream unique past the
         # 16-bit sequence wrap.
         self._roc_state: dict = {}
@@ -101,139 +101,108 @@ class SRTPCrypto:
         
         return sdp_line, crypto
     
-    def _derive_session_key(self, label: int, index: int = 0) -> bytes:
-        """Derive session key from master key using PRF.
-        
-        Args:
-            label: Key derivation label (0x00=enc, 0x01=auth, 0x02=salt)
-            index: Packet index (usually 0 for initial derivation)
-            
-        Returns:
-            Derived session key
+    # Lengths of the derived session keys by label (RFC 3711 §4.3, §5.2):
+    # cipher key 128 bit, HMAC-SHA1 key 160 bit, cipher salt 112 bit.
+    _KEY_LENGTHS = {0x00: 16, 0x01: 20, 0x02: 14}
+
+    def _derive_session_key(self, label: int) -> bytes:
+        """Derive a session key from the master key (RFC 3711 §4.3.1).
+
+        Key derivation rate 0: AES-CM keystream with the IV
+        (master_salt XOR label * 2^48) * 2^16.
         """
-        # Key derivation: AES-CM mode with master_key
-        # Input: master_salt XOR (label || index || 0x00...)
-        
-        # Build IV for key derivation
         iv = bytearray(16)
         iv[0:14] = self.master_salt
-        
-        # XOR with label and index
         iv[7] ^= label
-        
-        # Encrypt zeros with AES-CM
-        cipher = Cipher(
+        encryptor = Cipher(
             algorithms.AES(self.master_key),
             modes.CTR(bytes(iv)),
             backend=default_backend()
-        )
-        encryptor = cipher.encryptor()
-        
-        # Derive 16 bytes for encryption key, or 14 bytes for salt
-        key_len = 16 if label in (0x00, 0x01) else 14
-        session_key = encryptor.update(b'\x00' * key_len)
-        
-        return session_key
-    
-    def get_session_keys(self, ssrc: int) -> Tuple[bytes, bytes, bytes]:
-        """Get or derive session keys for a given SSRC.
-        
-        Args:
-            ssrc: RTP SSRC identifier
-            
-        Returns:
-            (session_key, session_auth_key, session_salt)
-        """
-        if ssrc in self._session_keys:
-            return self._session_keys[ssrc]
-        
-        # Derive keys for this SSRC
-        session_key = self._derive_session_key(0x00)  # Encryption key
-        session_auth_key = self._derive_session_key(0x01)  # Auth key
-        session_salt = self._derive_session_key(0x02)  # Salt key
-        
-        keys = (session_key, session_auth_key, session_salt)
-        self._session_keys[ssrc] = keys
-        
-        _LOGGER.debug(f"Derived session keys for SSRC {ssrc:08x}")
-        
-        return keys
-    
-    def _build_iv(self, session_salt: bytes, header: bytes, ssrc: int,
-                  sequence: int) -> bytes:
-        """Build the AES-CTR IV, including a rollover counter.
+        ).encryptor()
+        return encryptor.update(b'\x00' * self._KEY_LENGTHS[label])
 
-        The 16-bit sequence number alone repeats after ~21 minutes of speech,
-        and with it the CTR keystream — the classic two-time-pad problem. The
-        rollover counter is mixed in so each packet keeps a unique counter
-        block. It is XORed in, so for the first rollover period (ROC == 0) the
-        IV is bit-for-bit what this implementation produced before, which
-        keeps existing peers interoperable.
+    def get_session_keys(self, ssrc: int) -> Tuple[bytes, bytes, bytes]:
+        """Return (cipher key, auth key, cipher salt).
+
+        They depend on the master key only; `ssrc` is kept for callers.
+        """
+        if not self._session_keys:
+            self._session_keys = (
+                self._derive_session_key(0x00),
+                self._derive_session_key(0x01),
+                self._derive_session_key(0x02),
+            )
+            _LOGGER.debug("Derived SRTP session keys")
+        return self._session_keys
+
+    @staticmethod
+    def _header_length(packet: bytes) -> int:
+        """Length of the RTP header including CSRCs and header extension."""
+        length = 12 + (packet[0] & 0x0F) * 4
+        if packet[0] & 0x10 and len(packet) >= length + 4:
+            length += 4 + struct.unpack("!H", packet[length + 2:length + 4])[0] * 4
+        return length
+
+    def _rollover_counter(self, ssrc: int, sequence: int) -> int:
+        """Return the rollover counter for this packet (RFC 3711 §3.3.1).
+
+        Counts how often the 16-bit sequence number wrapped. A late packet
+        from before a wrap still belongs to the previous period.
         """
         state = self._roc_state.setdefault(ssrc, {"roc": 0, "last_seq": sequence})
-        if sequence < state["last_seq"] and state["last_seq"] - sequence > 32768:
-            state["roc"] = (state["roc"] + 1) & 0xFFFFFFFF
-        state["last_seq"] = sequence
+        roc, last = state["roc"], state["last_seq"]
+        if last - sequence > 32768:
+            roc = (roc + 1) & 0xFFFFFFFF
+            state["roc"], state["last_seq"] = roc, sequence
+        elif sequence - last > 32768:
+            return (roc - 1) & 0xFFFFFFFF if roc else 0
+        elif sequence > last:
+            state["last_seq"] = sequence
+        return roc
 
-        iv = bytearray(16)
-        iv[0:14] = session_salt
-        iv[4:8] = header[8:12]  # SSRC
-        iv[14:16] = header[2:4]  # Sequence
+    @staticmethod
+    def _build_iv(session_salt: bytes, ssrc: int, roc: int, sequence: int) -> bytes:
+        """AES-CM IV (RFC 3711 §4.1.1).
 
-        roc = state["roc"]
-        if roc:
-            roc_bytes = struct.pack("!I", roc)
-            for i in range(4):
-                iv[10 + i] ^= roc_bytes[i]
+        (salt * 2^16) XOR (SSRC * 2^64) XOR (packet index * 2^16), where the
+        packet index is ROC || SEQ; the low 16 bits are the block counter.
+        """
+        value = (
+            (int.from_bytes(session_salt, "big") << 16)
+            ^ (ssrc << 64)
+            ^ (((roc << 16) | sequence) << 16)
+        )
+        return value.to_bytes(16, "big")
 
-        return bytes(iv)
+    @staticmethod
+    def _auth_tag(auth_key: bytes, authenticated: bytes, roc: int) -> bytes:
+        """HMAC-SHA1 over the packet and the ROC, cut to 80 bits (§4.2)."""
+        return hmac.new(auth_key, authenticated + struct.pack("!I", roc), hashlib.sha1).digest()[:10]
 
     def decrypt_rtp(self, packet: bytes) -> Optional[bytes]:
         """Decrypt an SRTP packet to RTP.
-        
-        Args:
-            packet: SRTP packet bytes (header + encrypted payload + auth tag)
-            
-        Returns:
-            Decrypted RTP packet bytes, or None if decryption failed
+
+        Returns the RTP packet, or None if it is malformed or fails the
+        integrity check.
         """
         try:
-            # SRTP packet format:
-            # [RTP Header (12+ bytes)] [Encrypted Payload] [Auth Tag (10 bytes)]
-            
-            if len(packet) < 12 + 10:  # Min header + auth tag
+            if len(packet) < 12 + 10:
                 _LOGGER.debug(f"Packet too short: {len(packet)} bytes")
                 return None
-            
-            # Parse RTP header
-            header = packet[:12]
-            first_byte = header[0]
-            cc = first_byte & 0x0F  # CSRC count
-            
-            # Calculate header length (skip CSRC if present)
-            header_len = 12 + (cc * 4)
-            
+            header_len = self._header_length(packet)
             if len(packet) < header_len + 10:
                 _LOGGER.debug(f"Packet too short for header: {len(packet)} bytes")
                 return None
-            
-            # Extract SSRC for key derivation
-            ssrc = struct.unpack("!I", header[8:12])[0]
-            
-            # Get session keys
-            session_key, session_auth_key, session_salt = self.get_session_keys(ssrc)
-            
-            # Extract auth tag (last 10 bytes for HMAC-SHA1-80)
-            auth_tag = packet[-10:]
-            srtp_packet = packet[:-10]  # Everything except auth tag
 
-            # Verify the HMAC. This used to be skipped entirely, which left
-            # SRTP without any integrity protection — anyone able to reach the
-            # RTP port could inject audio without knowing the key.
-            expected_tag = hmac.new(
-                session_auth_key, srtp_packet, hashlib.sha1
-            ).digest()[:10]
-            if hmac.compare_digest(expected_tag, auth_tag):
+            sequence, ssrc = struct.unpack("!H4xI", packet[2:12])
+            session_key, session_auth_key, session_salt = self.get_session_keys(ssrc)
+            roc = self._rollover_counter(ssrc, sequence)
+
+            auth_tag = packet[-10:]
+            srtp_packet = packet[:-10]
+            if hmac.compare_digest(self._auth_tag(session_auth_key, srtp_packet, roc), auth_tag):
+                if not self._auth_verified_once:
+                    _LOGGER.info("SRTP: auth tag verified, integrity checking active")
                 self._auth_verified_once = True
             elif self._auth_verified_once:
                 # We know this peer's tags normally verify, so this packet is
@@ -241,89 +210,46 @@ class SRTPCrypto:
                 _LOGGER.warning("SRTP: dropping packet with invalid auth tag")
                 return None
             elif not self._auth_warned:
-                # Never saw a valid tag yet: the peer may compute the tag over
-                # a different input. Don't break working audio over it, but say
-                # so loudly once — integrity is not enforced in this state.
+                # Never saw a valid tag yet. Don't cut the audio over it, but
+                # say so once — integrity is not enforced in this state.
                 self._auth_warned = True
                 _LOGGER.warning(
                     "SRTP: auth tag does not verify; continuing without integrity "
                     "checking until a valid tag is seen"
                 )
 
-            # Extract encrypted payload
-            encrypted_payload = srtp_packet[header_len:]
-
-            sequence = struct.unpack("!H", header[2:4])[0]
-            iv = self._build_iv(session_salt, header, ssrc, sequence)
-
-            # Decrypt using AES-CTR
-            cipher = Cipher(
+            decryptor = Cipher(
                 algorithms.AES(session_key),
-                modes.CTR(bytes(iv)),
+                modes.CTR(self._build_iv(session_salt, ssrc, roc, sequence)),
                 backend=default_backend()
-            )
-            decryptor = cipher.decryptor()
-            decrypted_payload = decryptor.update(encrypted_payload)
-            
-            # Reconstruct RTP packet
-            rtp_packet = header + decrypted_payload
-            
-            return rtp_packet
-            
+            ).decryptor()
+            return srtp_packet[:header_len] + decryptor.update(srtp_packet[header_len:])
+
         except Exception as e:
             _LOGGER.error(f"SRTP decryption error: {e}")
             return None
 
     def encrypt_rtp(self, packet: bytes) -> Optional[bytes]:
-        """Encrypt a plain RTP packet to SRTP.
-        
-        Args:
-            packet: Plain RTP packet bytes (header + payload)
-            
-        Returns:
-            SRTP packet bytes (header + encrypted payload + 10-byte auth tag), or None on error
-        """
+        """Encrypt a plain RTP packet to SRTP (payload encrypted, 10-byte tag appended)."""
         try:
             if len(packet) < 12:
                 return None
-            
-            # Parse RTP header
-            header = packet[:12]
-            first_byte = header[0]
-            cc = first_byte & 0x0F
-            header_len = 12 + (cc * 4)
-            
+            header_len = self._header_length(packet)
             if len(packet) < header_len:
                 return None
-            
-            # Extract SSRC for key derivation
-            ssrc = struct.unpack("!I", header[8:12])[0]
-            session_key, session_auth_key, session_salt = self.get_session_keys(ssrc)
-            
-            # Extract payload
-            payload = packet[header_len:]
-            
-            # Build IV for encryption (same construction as decrypt)
-            sequence = struct.unpack("!H", header[2:4])[0]
-            iv = self._build_iv(session_salt, header, ssrc, sequence)
 
-            # Encrypt using AES-CTR
-            cipher = Cipher(
+            sequence, ssrc = struct.unpack("!H4xI", packet[2:12])
+            session_key, session_auth_key, session_salt = self.get_session_keys(ssrc)
+            roc = self._rollover_counter(ssrc, sequence)
+
+            encryptor = Cipher(
                 algorithms.AES(session_key),
-                modes.CTR(bytes(iv)),
+                modes.CTR(self._build_iv(session_salt, ssrc, roc, sequence)),
                 backend=default_backend()
-            )
-            encryptor = cipher.encryptor()
-            encrypted_payload = encryptor.update(payload)
-            
-            # Build authenticated portion: header + encrypted_payload
-            auth_portion = header + encrypted_payload
-            
-            # Compute HMAC-SHA1-80 authentication tag
-            auth_tag = hmac.new(session_auth_key, auth_portion, hashlib.sha1).digest()[:10]
-            
-            return auth_portion + auth_tag
-            
+            ).encryptor()
+            auth_portion = packet[:header_len] + encryptor.update(packet[header_len:])
+            return auth_portion + self._auth_tag(session_auth_key, auth_portion, roc)
+
         except Exception as e:
             _LOGGER.error(f"SRTP encryption error: {e}")
             return None

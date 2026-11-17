@@ -116,7 +116,7 @@ Alle Entitäten gehören zu einem Gerät mit dem Namen `Siedle <erste 8 Zeichen 
 ### Sensoren
 | Entitätsname | Beschreibung |
 |--------------|--------------|
-| Anrufstatus | Aktueller Anrufstatus: `Bereit` (idle) / `Verbunden` (connected) / `Aufnahme` (recording); andere interne Zustände (`ringing_in`, `ringing_out`, `ending`) erscheinen als Rohtext. Nur bei aktiviertem SIP. Attribute: `call_active` sowie Daten der letzten Statusänderung |
+| Anrufstatus | Aktueller Anrufstatus: `Bereit` (idle) / `Klingelt` (klingelt, ein- oder ausgehend) / `Verbunden` (connected) / `Aufnahme` (recording). Nur bei aktiviertem SIP. Attribute: `call_active` sowie Daten der letzten Statusänderung |
 | SIP Status | `Beide verbunden` / `Siedle verbunden` / `Extern verbunden` / `Getrennt`. Attribute: `siedle_sip_registered`, `external_sip_registered` |
 | MQTT Status | `Verbunden` / `Getrennt`. Attribut: `mqtt_connected` |
 | Letzte Aufnahme | Zeitstempel der letzten Aufnahme. Attribute: `filepath`, `filesize`, `media_url` (nur bei Pfaden unter `www/`) |
@@ -241,7 +241,7 @@ data:
   call_id: "..."
   caller_id: "..."     # Benutzerteil der From-URI
   caller_host: "..."
-  button: "default"
+  button: "default"   # Name des erkannten Klingeltasters, sonst "default"
   entry_id: "..."
 
 # Türklingel (FCM-Push)
@@ -379,6 +379,20 @@ Da Home Assistant typischerweise hinter einem NAT-Router steht, implementiert di
 - **Multi-Via Header**: Alle Via-Header werden korrekt in SIP-Antworten kopiert (RFC 3261)
 - **Record-Route**: Alle Record-Route-Header werden aus dem INVITE übernommen
 
+##### OPNsense / pfSense: „Static Port" für Home Assistant
+
+Die Integration meldet Siedle den per STUN ermittelten externen RTP-Port. Das funktioniert nur, wenn die Firewall für jedes Ziel denselben externen Port verwendet. OPNsense und pfSense vergeben standardmäßig je Ziel einen anderen Port (symmetrisches NAT) — dann kommt von der Türstation kein Ton an, obwohl der Anruf steht.
+
+Abhilfe ist eine ausgehende NAT-Regel mit „Static Port" für den Home-Assistant-Host:
+
+1. **Firewall → NAT → Ausgehend**, Modus **Hybrid** wählen.
+2. Neue Regel: Schnittstelle **WAN**, Protokoll **UDP**, Quelle **IP des Home-Assistant-Hosts** (`/32`), Ziel beliebig, Übersetzung **Schnittstellenadresse**, Haken bei **Statischer Port**.
+3. Speichern und anwenden. Bei mehreren WAN-Anschlüssen die Regel je WAN anlegen.
+
+Ob es wirkt, zeigt das Log: `STUN from RTP socket: external <IP>:<Port> (local port <Port>)` muss zweimal denselben Port nennen.
+
+Steht der externe SIP-Server (z. B. die FRITZ!Box) in einem anderen Subnetz als Home Assistant, muss er die Adresse erreichen, unter der er Home Assistant sieht. Die Integration trägt diese Adresse selbst in Kontakt und SDP ein; ein 1:1-NAT zwischen den Netzen genügt.
+
 #### SRTP-Verschlüsselung
 
 - **Algorithmus:** AES_CM_128_HMAC_SHA1_80 (RFC 3711)
@@ -410,6 +424,8 @@ logger:
 | Problem | Lösung |
 |---------|--------|
 | Kein Audio in Aufnahme | NAT-Konfiguration prüfen — Router muss UDP-Pakete durchlassen. Logs auf STUN-Ergebnisse prüfen. |
+| Weitergeleiteter Anruf steht, aber kein Ton von der Tür | Bei OPNsense/pfSense fehlt meist die „Static Port"-Regel, siehe [NAT-Traversal](#nat-traversal). |
+| Völlige Stille von der Tür, auch am Hörer der Innenstation | Kein Fehler der Integration: Verdrahtung der Sprechadern und beim Siedle IQ HTA den Schalter für die Mithörsperre (S104) prüfen. Er muss zur Verdrahtung der Anlage passen. Im Debug-Log steht dann `RTP A->B audio peak level` dauerhaft bei 8. |
 | FCM verbindet nicht | FCM braucht ~10-30 Sek. zum Starten. Token-Refresh passiert automatisch. |
 | SIP registriert nicht | TLS-Verbindung zu `sus2-sip.siedle.com:5061` prüfen. Firewall-Regeln checken. |
 | Türöffner funktioniert nicht | `sharedSecret` muss korrekt entschlüsselt sein — im Log nach "Restored decrypted sharedSecret" suchen. |

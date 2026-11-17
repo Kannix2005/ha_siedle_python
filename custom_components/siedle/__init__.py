@@ -105,6 +105,11 @@ async def async_setup(hass: HomeAssistant, config: dict):
         _LOGGER.debug("Siedle QR callback view already registered")
 
     try:
+        hass.http.register_view(SiedleQRScannerScriptView())
+    except ValueError:
+        _LOGGER.debug("Siedle QR scanner script view already registered")
+
+    try:
         hass.http.register_view(SiedleQRScannerView())
         _LOGGER.info("Registered Siedle QR scanner view at /api/siedle/qr_scanner")
     except ValueError:
@@ -636,7 +641,7 @@ def _sip_doorbell_callback(hass: HomeAssistant, entry: ConfigEntry, data: dict,
             "call_id": data.get("call_id", ""),
             "caller_id": data.get("caller_id", ""),
             "caller_host": data.get("caller_host", ""),
-            "button": data.get("button", "default"),
+            "button": data.get("button_name", "default"),
             "entry_id": entry.entry_id,
         },
     )
@@ -659,9 +664,9 @@ def _sip_state_callback(hass: HomeAssistant, entry: ConfigEntry, state, data: di
     call_history_sensor = entry_data.get("call_history_sensor")
     if call_history_sensor:
         state_val = state.value if hasattr(state, 'value') else str(state)
-        if state_val == "answered":
-            call_history_sensor.call_answered()
-        elif state_val in ("idle", "ended"):
+        if state_val in ("connected", "recording"):
+            call_history_sensor.call_answered(data=data)
+        elif state_val == "idle":
             call_history_sensor.call_ended(data=data)
     
     # Update recording sensor if recording file is available
@@ -1011,7 +1016,7 @@ QR_SCANNER_HTML = """<!DOCTYPE html>
             </div>
         </div>
     </div>
-    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script src="/api/siedle/html5-qrcode.min.js"></script>
     <script>
         var configFlowId = %%CONFIG_FLOW_ID%%;
         var callbackUrl = %%CALLBACK_URL%%;
@@ -1183,6 +1188,22 @@ def _js_literal(value: str) -> str:
         .replace(">", "\\u003e")
         .replace("&", "\\u0026")
     )
+
+
+class SiedleQRScannerScriptView(HomeAssistantView):
+    """Serve the bundled html5-qrcode library the scanner page loads."""
+
+    url = "/api/siedle/html5-qrcode.min.js"
+    name = "api:siedle:qr_scanner_script"
+    requires_auth = False
+
+    async def get(self, request):
+        """Serve the scanner library from the integration folder."""
+        from aiohttp import web
+
+        return web.FileResponse(
+            os.path.join(os.path.dirname(__file__), "static", "html5-qrcode.min.js")
+        )
 
 
 class SiedleQRScannerView(HomeAssistantView):

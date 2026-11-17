@@ -258,7 +258,7 @@ class SiedleCallStatusSensor(SiedleSensorBase):
         if not self._sip_manager:
             return CALL_STATE_IDLE
         
-        state = self._sip_manager.state
+        state = self._call_state()
         
         # Map to German
         state_map = {
@@ -268,7 +268,14 @@ class SiedleCallStatusSensor(SiedleSensorBase):
             CALL_STATE_RECORDING: "Aufnahme",
         }
         
-        return state_map.get(state.value, state.value)
+        return state_map.get(state, state)
+    
+    def _call_state(self) -> str:
+        """Return the SIP manager state, with both ringing directions merged."""
+        value = self._sip_manager.state.value
+        if value in ("ringing_in", "ringing_out"):
+            return CALL_STATE_RINGING
+        return value
     
     @property
     def icon(self) -> str:
@@ -276,7 +283,7 @@ class SiedleCallStatusSensor(SiedleSensorBase):
         if not self._sip_manager:
             return "mdi:phone"
         
-        state = self._sip_manager.state.value
+        state = self._call_state()
         icons = {
             CALL_STATE_IDLE: "mdi:phone",
             CALL_STATE_RINGING: "mdi:phone-ring",

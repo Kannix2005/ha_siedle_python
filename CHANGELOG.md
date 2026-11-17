@@ -5,6 +5,26 @@ Alle wichtigen Änderungen an diesem Projekt werden hier dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [3.1.7] - 2026-11-17
+
+### Behoben
+- **Weitergeleitete Gespräche hatten nur Rauschen statt Ton** (#24). Die SRTP-Umsetzung wich von RFC 3711 ab: Initialisierungsvektor, Länge des Authentifizierungsschlüssels und der Rollover-Zähler im Auth-Tag stimmten nicht. Ver- und Entschlüsselung sind neu umgesetzt und gegen die Referenzwerte aus dem RFC und ein libsrtp-Paket getestet; das Auth-Tag wird jetzt tatsächlich verifiziert.
+- **SIP über TLS/TCP verlor Nachrichten** (#27). Nachrichten wurden nicht nach `Content-Length` getrennt. Kam das SDP einer Antwort oder ein `BYE` in einem eigenen Segment, ging es verloren: kein Ton, und das Auflegen am Telefon kam nicht an.
+- **Auflegen beendete das Gespräch an der Türstation nicht.** Das `BYE` zur Türstation hatte vertauschte Dialogparteien und kein Route-Set; der Siedle-Server schloss daraufhin die Verbindung. Es wird jetzt als Anfrage des Angerufenen aufgebaut (RFC 3261 §12.2.1.1).
+- **Hinter einem SIP-Server in einem anderen Subnetz** (z. B. FRITZ!Box hinter einer Firewall) standen im SDP und im Kontakt die lokale Adresse. Ton und `BYE` des Telefons erreichten Home Assistant nicht. Es wird die Adresse eingetragen, unter der der Server Home Assistant sieht.
+- **Unverschlüsselte Stille-Pakete liefen parallel zum Gespräch** (#28). Der Keepalive wird jetzt verschlüsselt und pausiert, sobald ein Telefon verbunden ist.
+- **Aufnahmen waren verzerrt** (#34). Die Umrechnung von A-law und μ-law in PCM benutzte die Tabellen mit falschem Index.
+- Der Sensor „Anrufstatus" zeigte beim Klingeln einen unübersetzten Zustand; `ringing_in` und `ringing_out` erscheinen jetzt als „Klingelt".
+- Das Feld `button` im Klingel-Event war bei unbekannter Taste leer statt `default`.
+
+### Geändert
+- **Auf jedes Klingeln antwortet die Integration sofort mit `180 Ringing`**, wie die Siedle-App.
+- **Der QR-Scanner lädt sein Skript nicht mehr von unpkg.com**, sondern aus der Integration (html5-qrcode 2.3.8, Apache-2.0).
+- `paho-mqtt` steht wieder in den Requirements, damit MQTT nicht von einer zufällig vorhandenen Installation abhängt.
+- Debug-Log: Spitzenpegel je Richtung alle 2 Sekunden, um Stille, Sprache und fehlerhafte Entschlüsselung zu unterscheiden. Der Anfang des SRTP-Schlüssels wird nicht mehr protokolliert.
+- README: Abschnitt zur „Static Port"-Regel für OPNsense/pfSense und zwei neue Einträge unter „Häufige Probleme".
+- Unit-Tests liegen jetzt im Repository und laufen in der CI.
+
 ## [3.1.6] - 2026-11-12
 
 ### Behoben

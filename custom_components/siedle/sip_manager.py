@@ -221,6 +221,7 @@ class SipConnection:
         self.config = config
         self.name = name
         self._socket: Optional[socket.socket] = None
+        self._rx_buffer = b""  # unframed bytes of a TCP/TLS stream
         self._ssl_socket: Optional[ssl.SSLSocket] = None
         self._connected = False
         self._registered = False
@@ -473,6 +474,12 @@ class SipConnection:
             auth_header: complete (Proxy-)Authorization header line
         """
         local_ip = self._get_local_ip()
+        # Behind NAT the peer reaches us only under the address it sees itself;
+        # in-dialog requests (the BYE when the phone hangs up) go to the Contact.
+        if self._external_ip and self._external_port:
+            contact_host, contact_port = self._external_ip, self._external_port
+        else:
+            contact_host, contact_port = local_ip, self._local_port
         call_id = call_id or str(uuid.uuid4())
         from_tag = from_tag or uuid.uuid4().hex[:8]
         branch = uuid.uuid4().hex[:12]
@@ -509,7 +516,7 @@ class SipConnection:
             f"To: <{to_uri}>",
             f"Call-ID: {call_id}",
             f"CSeq: {cseq} INVITE",
-            f"Contact: <sip:{self.config.username}@{local_ip}:{self._local_port};transport={transport_str.lower()}>",
+            f"Contact: <sip:{self.config.username}@{contact_host}:{contact_port};transport={transport_str.lower()}>",
             *([auth_header] if auth_header else []),
             "Content-Type: application/sdp",
             f"Content-Length: {len(sdp)}",
@@ -554,7 +561,7 @@ class SipConnection:
 
         # Build To header with tag for 200 OK
         to_header = request.to_header
-        if status_code == 200 and ";tag=" not in to_header:
+        if status_code in (180, 200) and ";tag=" not in to_header:
             to_header = f"{to_header};tag={to_tag}"
         
         lines = [f"SIP/2.0 {status_code} {status_text}"]
@@ -571,7 +578,7 @@ class SipConnection:
             lines.append(f"Via: {request.via}")
         
         # Copy Record-Route headers for dialog-establishing responses (200 OK to INVITE)
-        if status_code == 200 and request.method == "INVITE":
+        if status_code in (180, 200) and request.method == "INVITE":
             for rr in request.record_route_list:
                 lines.append(f"Record-Route: {rr}")
         
@@ -582,7 +589,7 @@ class SipConnection:
             f"CSeq: {request.cseq}",
         ])
         
-        if status_code == 200 and request.method == "INVITE":
+        if status_code in (180, 200) and request.method == "INVITE":
             lines.append(f"Contact: <sip:{self.config.username}@{local_ip}:{self._local_port};transport={transport_str.lower()}>")
             lines.append("Allow: INVITE, ACK, CANCEL, BYE, NOTIFY, REFER, MESSAGE, OPTIONS, INFO, SUBSCRIBE")
             lines.append("User-Agent: Siedle-HA/1.0")
@@ -625,6 +632,38 @@ class SipConnection:
         
         return "\r\n".join(lines).encode('utf-8')
     
+    def create_bye_for_incoming(self, invite: SipMessage) -> bytes:
+        """Create the BYE for a call we answered (the peer sent the INVITE).
+
+        RFC 3261 §12.2.1.1: in a request of our own the dialog parties swap —
+        From is the To of the INVITE with the tag we answered with, To is the
+        caller's From. The request goes to the caller's Contact along the
+        recorded route.
+        """
+        local_ip = self._get_local_ip()
+        local_party = invite.to_header or ""
+        if ";tag=" not in local_party:
+            local_party = f"{local_party};tag={self._dialog_to_tags.get(invite.call_id, '')}"
+        contact = re.search(r"<([^>]+)>", invite.contact or "")
+        target = contact.group(1) if contact else (invite.contact or "").strip()
+
+        lines = [
+            f"BYE {target} SIP/2.0",
+            f"Via: SIP/2.0/{self.config.transport_str} {local_ip}:{self._local_port};rport;branch=z9hG4bK-{uuid.uuid4().hex[:12]}",
+        ]
+        lines.extend(f"Route: {route}" for route in invite.record_route_list)
+        lines.extend([
+            "Max-Forwards: 70",
+            f"From: {local_party}",
+            f"To: {invite.from_header}",
+            f"Call-ID: {invite.call_id}",
+            "CSeq: 1 BYE",
+            "Content-Length: 0",
+            "",
+            "",
+        ])
+        return "\r\n".join(lines).encode('utf-8')
+
     def create_ack(self, call: SipCall, for_response: SipMessage) -> bytes:
         """Create SIP ACK message.
 
@@ -735,7 +774,7 @@ class SipConnection:
             _LOGGER.debug("%s: REGISTER (%d bytes):\n%s", self.name, len(register_msg), register_msg.decode()[:800])
             self._socket.send(register_msg)
 
-            response = self._socket.recv(4096)
+            response = self._recv_blocking()
             msg = self.parse_message(response)
             _LOGGER.debug("%s: Response: %s %s", self.name, msg.status_code, msg.status_text)
 
@@ -761,7 +800,7 @@ class SipConnection:
                     _LOGGER.debug("%s: Auth REGISTER:\n%s", self.name, auth_register.decode()[:800])
                     self._socket.send(auth_register)
 
-                    response = self._socket.recv(4096)
+                    response = self._recv_blocking()
                     msg = self.parse_message(response)
                     _LOGGER.debug("%s: Auth response: %s %s", self.name, msg.status_code, msg.status_text)
 
@@ -818,15 +857,62 @@ class SipConnection:
         except Exception as e:
             _LOGGER.error(f"{self.name}: STUN discovery error: {e}")
     
+    # A buffer this full without one complete message is not SIP anymore.
+    MAX_RX_BUFFER = 65536
+
+    def _pop_message(self) -> Optional[bytes]:
+        """Take one complete SIP message off the stream buffer.
+
+        TCP and TLS deliver a byte stream: one recv() may hold half a message
+        or several. The end of a message is the blank line after the headers
+        plus Content-Length bytes of body (RFC 3261 §18.3).
+        """
+        buf = self._rx_buffer.lstrip(b"\r\n")  # keepalive CRLFs between messages
+        self._rx_buffer = buf
+        end = buf.find(b"\r\n\r\n")
+        if end < 0:
+            if len(buf) > self.MAX_RX_BUFFER:
+                _LOGGER.warning("%s: Dropping %d bytes without SIP message boundary", self.name, len(buf))
+                self._rx_buffer = b""
+            return None
+        length = re.search(rb"(?im)^(?:Content-Length|l)[ \t]*:[ \t]*(\d+)", buf[:end])
+        total = end + 4 + (int(length.group(1)) if length else 0)
+        if len(buf) < total:
+            return None
+        self._rx_buffer = buf[total:]
+        return buf[:total]
+
+    def _recv_blocking(self) -> bytes:
+        """Receive one whole message, waiting up to the socket timeout."""
+        if self.config.transport == SipTransport.UDP:
+            return self._socket.recv(4096)
+        while True:
+            data = self._pop_message()
+            if data:
+                return data
+            chunk = self._socket.recv(4096)
+            if not chunk:
+                return b""
+            self._rx_buffer += chunk
+
     def recv(self, timeout: float = 0.1) -> Optional[SipMessage]:
         """Receive and parse message with timeout."""
         try:
-            if self.config.transport != SipTransport.UDP:
+            stream = self.config.transport != SipTransport.UDP
+            if stream:
+                buffered = self._pop_message()
+                if buffered:
+                    return self.parse_message(buffered)
                 self._socket.setblocking(False)
             self._socket.settimeout(timeout)
             data = self._socket.recv(4096)
             if data:
                 self._last_recv_time = time.time()
+                if stream:
+                    self._rx_buffer += data
+                    data = self._pop_message()
+                    if not data:
+                        return None
                 return self.parse_message(data)
             else:
                 # Empty data = connection closed by peer
@@ -884,6 +970,7 @@ class SipConnection:
                 # Filter responses to keepalive/re-register (OPTIONS, REGISTER)
                 # Only forward INVITE/BYE/ACK/CANCEL related responses to callbacks
                 if not msg.is_request and msg.status_code:
+                    self._extract_via_received(msg)
                     cseq_header = msg.cseq or ""
                     cseq_method = cseq_header.split()[-1] if cseq_header.strip() else ""
                     if cseq_method == "OPTIONS":
@@ -1442,6 +1529,15 @@ class SipCallManager:
                 _LOGGER.info("Sent 100 Trying to Siedle")
             except Exception as e:
                 _LOGGER.error(f"Failed to send 100 Trying: {e}")
+
+            # The Siedle app answers every incoming call with 180 right away.
+            # Without it the server connects the call but sends silence
+            # instead of the door audio.
+            try:
+                self._siedle_conn.send(self._siedle_conn.create_response(msg, 180, "Ringing"))
+                _LOGGER.info("Sent 180 Ringing to Siedle")
+            except Exception as e:
+                _LOGGER.error(f"Failed to send 180 Ringing: {e}")
             
             # Extract caller info
             from_match = re.search(r'<sip:([^@>]+)@([^>]+)>', msg.from_header or "")
@@ -1457,6 +1553,8 @@ class SipCallManager:
                 "sdp": msg.body,
             }
             
+            _LOGGER.debug("Siedle INVITE SDP:\n%s", re.sub(r"inline:\S+", "inline:<redacted>", msg.body or ""))
+
             # F12: Identify doorbell button
             button_name = self._identify_doorbell_button(caller_id, msg.from_header)
             if button_name:
@@ -1636,6 +1734,7 @@ class SipCallManager:
                 _LOGGER.debug("External: retransmitted 200 OK — ACK sent again")
                 return
             _LOGGER.info("External: 200 OK — Phone picked up! ACK sent")
+            _LOGGER.debug("External 200 OK SDP:\n%s", msg.body or "")
             
             # F1: Cancel forward timeout — phone answered
             self._cancel_forward_timeout()
@@ -1826,7 +1925,9 @@ class SipCallManager:
         
         # Step 3: Determine external-facing IP for socket_b
         ext_host = self.external_config.host
-        sdp_ip_b = self._external_conn._get_local_ip()
+        # The address the server sees us under: with NAT between Home Assistant
+        # and a LAN SIP server (two subnets) our own address is unreachable for it.
+        sdp_ip_b = self._external_conn.get_sdp_ip()
         sdp_port_b = local_rtp_port_b
         
         if not _is_private_ip(ext_host):
@@ -1836,7 +1937,7 @@ class SipCallManager:
                 sdp_port_b = stun_port_b
                 _LOGGER.info(f"STUN (External): external {sdp_ip_b}:{sdp_port_b} for local port {local_rtp_port_b}")
         else:
-            _LOGGER.info(f"External SIP is on LAN ({ext_host}) — using local IP {sdp_ip_b} in SDP")
+            _LOGGER.info(f"External SIP is on LAN ({ext_host}) — using IP {sdp_ip_b} in SDP")
         
         # Store for reuse on sequential targets
         self._cached_sdp_ip_b = sdp_ip_b
@@ -2019,7 +2120,7 @@ class SipCallManager:
                     for line in invite_msg.body.split('\r\n'):
                         if line.startswith('a=crypto:'):
                             crypto_line = line[9:]  # Remove "a=crypto:" prefix
-                            _LOGGER.info(f"Found crypto line: {crypto_line[:50]}...")
+                            _LOGGER.info("Found crypto line: %s", crypto_line.split("inline:")[0].strip())
                             break
                     
                     if crypto_line:
@@ -2101,10 +2202,13 @@ class SipCallManager:
             # RFC 4568: Answer MUST contain its own crypto key, NOT echo the offerer's key
             try:
                 from .srtp_handler import SRTPCrypto
-                our_crypto_line, _ = SRTPCrypto.generate_sdp_crypto_line()
+                our_crypto_line, srtp_encrypt = SRTPCrypto.generate_sdp_crypto_line()
                 crypto_attr = f"a=crypto:{our_crypto_line}\r\n"
+                if self.rtp_bridge:
+                    # What we send to the door (keepalive, announcement) must
+                    # be encrypted with the key we announce here
+                    self.rtp_bridge.set_srtp_encrypt(srtp_encrypt)
                 _LOGGER.info(f"Responding with RTP/SAVP, own SRTP key generated")
-                _LOGGER.debug(f"Our crypto line: {our_crypto_line[:50]}...")
             except Exception as e:
                 _LOGGER.error(f"Failed to generate SRTP key, using offerer's: {e}")
                 crypto_attr = f"a=crypto:{crypto_line}\r\n"
@@ -2345,7 +2449,12 @@ class SipCallManager:
         if self._siedle_call and self._siedle_conn:
             if self._siedle_call.state in (CallState.CONNECTED, CallState.RECORDING):
                 try:
-                    bye = self._siedle_conn.create_bye(self._siedle_call)
+                    if self._siedle_call.invite_data:
+                        # The door station called us
+                        invite = SipConnection.parse_message(self._siedle_call.invite_data)
+                        bye = self._siedle_conn.create_bye_for_incoming(invite)
+                    else:
+                        bye = self._siedle_conn.create_bye(self._siedle_call)
                     self._siedle_conn.send(bye)
                     _LOGGER.info("BYE sent to Siedle")
                 except Exception as e:
@@ -2509,6 +2618,8 @@ class SipCallManager:
         
         while self._running:
             time.sleep(5)  # Check every 5 seconds
+            if not self._running:
+                break
             
             # Check Siedle connection
             if self._siedle_conn and self._siedle_conn.connection_lost:

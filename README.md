@@ -117,7 +117,7 @@ All entities belong to one device named `Siedle <first 8 characters of the endpo
 ### Sensors
 | Entity name | Description |
 |-------------|-------------|
-| Anrufstatus | Current call status: `Bereit` (idle) / `Verbunden` (connected) / `Aufnahme` (recording); other internal states (`ringing_in`, `ringing_out`, `ending`) are shown as raw text. Only with SIP enabled. Attributes: `call_active` plus data of the last state change |
+| Anrufstatus | Current call status: `Bereit` (idle) / `Klingelt` (ringing, incoming or outgoing) / `Verbunden` (connected) / `Aufnahme` (recording). Only with SIP enabled. Attributes: `call_active` plus data of the last state change |
 | SIP Status | `Beide verbunden` / `Siedle verbunden` / `Extern verbunden` / `Getrennt`. Attributes: `siedle_sip_registered`, `external_sip_registered` |
 | MQTT Status | `Verbunden` / `Getrennt`. Attribute: `mqtt_connected` |
 | Letzte Aufnahme | Timestamp of the last recording. Attributes: `filepath`, `filesize`, `media_url` (only for paths below `www/`) |
@@ -242,7 +242,7 @@ data:
   call_id: "..."
   caller_id: "..."     # user part of the From URI
   caller_host: "..."
-  button: "default"
+  button: "default"   # name of the matched doorbell button, else "default"
   entry_id: "..."
 
 # Doorbell (FCM push)
@@ -380,6 +380,20 @@ Since Home Assistant typically runs behind a NAT router, the integration impleme
 - **Multi-Via Header**: All Via headers are correctly copied in SIP responses (RFC 3261)
 - **Record-Route**: All Record-Route headers from INVITE are adopted
 
+##### OPNsense / pfSense: "Static Port" for Home Assistant
+
+The integration tells Siedle the external RTP port it learned via STUN. That only works if the firewall uses the same external port for every destination. OPNsense and pfSense pick a different port per destination by default (symmetric NAT) — the call connects, but no audio arrives from the door station.
+
+The fix is an outbound NAT rule with "Static Port" for the Home Assistant host:
+
+1. **Firewall → NAT → Outbound**, select **Hybrid** mode.
+2. New rule: interface **WAN**, protocol **UDP**, source **IP of the Home Assistant host** (`/32`), destination any, translation **interface address**, tick **Static Port**.
+3. Save and apply. With several WAN links, add the rule for each of them.
+
+The log shows whether it works: `STUN from RTP socket: external <IP>:<port> (local port <port>)` must name the same port twice.
+
+If the external SIP server (e.g. a FRITZ!Box) sits in a different subnet than Home Assistant, it has to reach the address under which it sees Home Assistant. The integration puts that address into Contact and SDP on its own; a 1:1 NAT between the networks is enough.
+
 #### SRTP Encryption
 
 - **Algorithm:** AES_CM_128_HMAC_SHA1_80 (RFC 3711)
@@ -411,6 +425,8 @@ logger:
 | Problem | Solution |
 |---------|----------|
 | No audio in recording | Check NAT configuration — router must allow UDP packets. Check logs for STUN results. |
+| Forwarded call connects, but no audio from the door | On OPNsense/pfSense the "Static Port" rule is usually missing, see [NAT Traversal](#nat-traversal). |
+| Complete silence from the door, also on the indoor station's handset | Not a fault of the integration: check the wiring of the speech wires and, on a Siedle IQ HTA, the eavesdropping-protection switch (S104). It has to match how the system is wired. The debug log then shows `RTP A->B audio peak level` stuck at 8. |
 | FCM not connecting | FCM needs ~10-30 sec. to start. Token refresh happens automatically. |
 | SIP not registering | Check TLS connection to `sus2-sip.siedle.com:5061`. Check firewall rules. |
 | Door opener not working | `sharedSecret` must be correctly decrypted — look for "Restored decrypted sharedSecret" in log. |
