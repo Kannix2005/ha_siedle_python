@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden hier dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [3.1.8] - 2026-11-17
+
+### Sicherheit
+- **Gefälschte RTP-Pakete konnten ein Gespräch stumm schalten.** Der SRTP-Rollover-Zähler wurde schon vor der Prüfung des Auth-Tags fortgeschrieben. Ein Angreifer, der Pakete an den RTP-Port schicken kann, konnte den Zähler verstellen; danach scheiterten alle echten Pakete an der Authentifizierung. Der Zähler wird jetzt nach RFC 3711 Anhang A geschätzt und erst nach bestandener Prüfung gespeichert. Das behebt auch verspätete Pakete rund um den Sequenzüberlauf (#24).
+- **SIP über TLS/TCP: angekündigte Übergröße wird verworfen.** Eine Nachricht mit sehr großem `Content-Length` ließ den Empfangspuffer über die Obergrenze von 64 KiB hinaus wachsen.
+
 ## [3.1.7] - 2026-11-17
 
 ### Behoben

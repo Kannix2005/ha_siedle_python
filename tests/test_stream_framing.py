@@ -70,6 +70,13 @@ class StreamFramingTest(unittest.TestCase):
         msgs = drain(connection([b"\r\n\r\n" + BYE[:20], BYE[20:]]))
         self.assertEqual([m.method for m in msgs], ["BYE"])
 
+    def test_announced_oversized_body_is_not_buffered(self):
+        huge = b"MESSAGE sip:tuer@10.10.10.3 SIP/2.0\r\nCall-ID: x\r\nContent-Length: 99999999\r\n\r\n"
+        conn = connection([huge, b"A" * 4096, BYE])
+        msgs = drain(conn)
+        self.assertLessEqual(len(conn._rx_buffer), conn.MAX_RX_BUFFER)
+        self.assertNotIn("MESSAGE", [m.method for m in msgs])
+
     def test_udp_datagrams_are_parsed_as_they_arrive(self):
         msgs = drain(connection([BYE], transport=sm.SipTransport.UDP))
         self.assertEqual([m.method for m in msgs], ["BYE"])

@@ -143,22 +143,28 @@ class SRTPCrypto:
             length += 4 + struct.unpack("!H", packet[length + 2:length + 4])[0] * 4
         return length
 
-    def _rollover_counter(self, ssrc: int, sequence: int) -> int:
-        """Return the rollover counter for this packet (RFC 3711 §3.3.1).
+    def _estimate_roc(self, ssrc: int, sequence: int) -> int:
+        """Rollover counter for this packet (RFC 3711 §3.3.1, Appendix A).
 
-        Counts how often the 16-bit sequence number wrapped. A late packet
-        from before a wrap still belongs to the previous period.
+        Only estimates. _commit_roc() stores the result once the packet is
+        accepted, so a forged or late packet cannot move the counter.
         """
-        state = self._roc_state.setdefault(ssrc, {"roc": 0, "last_seq": sequence})
-        roc, last = state["roc"], state["last_seq"]
-        if last - sequence > 32768:
-            roc = (roc + 1) & 0xFFFFFFFF
-            state["roc"], state["last_seq"] = roc, sequence
-        elif sequence - last > 32768:
-            return (roc - 1) & 0xFFFFFFFF if roc else 0
-        elif sequence > last:
-            state["last_seq"] = sequence
+        state = self._roc_state.get(ssrc)
+        if state is None:
+            return 0
+        roc, last = state
+        if last < 32768:
+            if sequence - last > 32768:
+                return (roc - 1) & 0xFFFFFFFF if roc else 0
+        elif last - 32768 > sequence:
+            return (roc + 1) & 0xFFFFFFFF
         return roc
+
+    def _commit_roc(self, ssrc: int, roc: int, sequence: int) -> None:
+        """Remember the highest packet index seen for this source."""
+        state = self._roc_state.get(ssrc)
+        if state is None or (roc, sequence) > state or (state[0] == 0xFFFFFFFF and roc == 0):
+            self._roc_state[ssrc] = (roc, sequence)
 
     @staticmethod
     def _build_iv(session_salt: bytes, ssrc: int, roc: int, sequence: int) -> bytes:
@@ -196,7 +202,7 @@ class SRTPCrypto:
 
             sequence, ssrc = struct.unpack("!H4xI", packet[2:12])
             session_key, session_auth_key, session_salt = self.get_session_keys(ssrc)
-            roc = self._rollover_counter(ssrc, sequence)
+            roc = self._estimate_roc(ssrc, sequence)
 
             auth_tag = packet[-10:]
             srtp_packet = packet[:-10]
@@ -217,6 +223,9 @@ class SRTPCrypto:
                     "SRTP: auth tag does not verify; continuing without integrity "
                     "checking until a valid tag is seen"
                 )
+
+            # Accepted: only now may the packet advance the rollover state.
+            self._commit_roc(ssrc, roc, sequence)
 
             decryptor = Cipher(
                 algorithms.AES(session_key),
@@ -240,7 +249,8 @@ class SRTPCrypto:
 
             sequence, ssrc = struct.unpack("!H4xI", packet[2:12])
             session_key, session_auth_key, session_salt = self.get_session_keys(ssrc)
-            roc = self._rollover_counter(ssrc, sequence)
+            roc = self._estimate_roc(ssrc, sequence)
+            self._commit_roc(ssrc, roc, sequence)
 
             encryptor = Cipher(
                 algorithms.AES(session_key),

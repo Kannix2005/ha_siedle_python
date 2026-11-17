@@ -49,6 +49,27 @@ class SrtpVectorTest(unittest.TestCase):
             self.assertEqual(rx.decrypt_rtp(tx.encrypt_rtp(packet)), packet)
         self.assertTrue(rx._auth_verified_once)
 
+    @staticmethod
+    def _packet(seq):
+        return bytes.fromhex("8008") + seq.to_bytes(2, "big") + bytes(4) + b"\x11\x22\x33\x44" + b"audio" * 4
+
+    def test_reordered_packet_across_the_rollover(self):
+        # Sender order 65534, 65535, 0, 1 — 65534 arrives late, after the wrap.
+        tx = srtp.SRTPCrypto(MASTER_KEY, MASTER_SALT)
+        rx = srtp.SRTPCrypto(MASTER_KEY, MASTER_SALT)
+        sent = {seq: tx.encrypt_rtp(self._packet(seq)) for seq in (65534, 65535, 0, 1, 2)}
+        for seq in (65535, 0, 65534, 1, 2):
+            self.assertEqual(rx.decrypt_rtp(sent[seq]), self._packet(seq), seq)
+
+    def test_forged_packets_cannot_move_the_rollover_counter(self):
+        tx = srtp.SRTPCrypto(MASTER_KEY, MASTER_SALT)
+        rx = srtp.SRTPCrypto(MASTER_KEY, MASTER_SALT)
+        self.assertIsNotNone(rx.decrypt_rtp(tx.encrypt_rtp(self._packet(40000))))
+        for seq in (100, 30000, 50000, 100):
+            forged = self._packet(seq) + b"\x00" * 10  # no valid tag
+            self.assertIsNone(rx.decrypt_rtp(forged))
+        self.assertEqual(rx.decrypt_rtp(tx.encrypt_rtp(self._packet(40001))), self._packet(40001))
+
     def test_header_extension_stays_in_the_clear(self):
         header = bytes.fromhex("9008000100000000aabbccdd") + bytes.fromhex("bede0001") + b"\x01\x02\x03\x04"
         packet = header + b"payload-bytes"

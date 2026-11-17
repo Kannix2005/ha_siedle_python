@@ -877,6 +877,11 @@ class SipConnection:
             return None
         length = re.search(rb"(?im)^(?:Content-Length|l)[ \t]*:[ \t]*(\d+)", buf[:end])
         total = end + 4 + (int(length.group(1)) if length else 0)
+        if total > self.MAX_RX_BUFFER:
+            # Never buffer towards a size the peer merely announced.
+            _LOGGER.warning("%s: Dropping SIP message announcing %d bytes", self.name, total)
+            self._rx_buffer = b""
+            return None
         if len(buf) < total:
             return None
         self._rx_buffer = buf[total:]
