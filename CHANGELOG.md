@@ -5,6 +5,20 @@ Alle wichtigen Änderungen an diesem Projekt werden hier dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [3.1.9] - 2026-11-18
+
+### Behoben
+- **Auflegen während des Klingelns blockierte die Türstation etwa 45 Sekunden** (#25). `siedle.hangup_call` beendete einen noch klingelnden Türruf nur lokal; der Siedle-Server hielt ihn offen, und weiteres Klingeln kam in dieser Zeit nicht an. Der Ruf wird jetzt kurz angenommen (ohne Ton) und sofort mit `BYE` beendet. Das beendet das Klingeln auch auf den anderen Geräten des Siedle-Kontos.
+- **FRITZ!Box meldete alle 5 Minuten „Anmeldung … nicht erfolgreich"** (#26). Die Erneuerung der SIP-Registrierung benutzte die Nonce der vorigen Anmeldung, die die FRITZ!Box kein zweites Mal annimmt. Jede Erneuerung läuft jetzt wie die erste Anmeldung ab. Wird eine Erneuerung abgelehnt oder bleibt sie 32 Sekunden unbeantwortet, baut die Integration die Verbindung neu auf, statt weiter „verbunden" zu melden. Gewährt der Server eine kürzere Gültigkeit, wird entsprechend früher erneuert.
+- **MQTT blieb bis zum Neuladen aus, wenn der erste Verbindungsaufbau scheiterte** (#31), zum Beispiel wenn Home Assistant vor dem Internetzugang startet. Die Verbindung wird jetzt im Hintergrund weiter versucht.
+- **Ein abgelehnter Access-Token wurde nach einem `401` nicht erneuert** (#33). Türöffner, Licht und Statusabfrage scheiterten, bis der Token von selbst ablief.
+- **Nach dem Entladen der Integration konnte ein FCM-Client weiterlaufen** (#33), wenn das Entladen in einen Verbindungsaufbau fiel. Folge waren doppelte Klingel-Ereignisse.
+- **SIP-Anfragen wie `OPTIONS`, `UPDATE` und `NOTIFY` blieben unbeantwortet** (#33). Sie bekommen jetzt `200 OK`, unbekannte Anfragen `501`. Ein `INVITE` innerhalb eines laufenden Gesprächs wird beantwortet, statt als neues Klingeln das Gespräch zu beenden.
+- Fehlerantworten auf SIP-Anfragen tragen jetzt wie vorgeschrieben einen To-Tag (RFC 3261 §8.2.6.2).
+
+### Sicherheit
+- **Der Diagnose-Download enthielt den DTMF-Türöffnercode und Anrufernummern im Klartext** (#32). Beide werden jetzt geschwärzt. Wer eine ältere Diagnose-Datei öffentlich geteilt hat, sollte den Türöffnercode ändern.
+
 ## [3.1.8] - 2026-11-17
 
 ### Sicherheit

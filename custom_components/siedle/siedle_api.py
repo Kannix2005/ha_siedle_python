@@ -114,7 +114,7 @@ class Siedle:
                     # force token refresh
                     self._token["expires_at"] = time.time() - 10
                     self._token["expires_in"] = "-30"
-                    self.refreshToken()
+                    self.refreshToken(force_expire=True)
             else:
                 self.authorize(setupInfo)
 
@@ -300,8 +300,13 @@ class Siedle:
         self._load_config()
         self._load_contacts()
     
-    def refreshToken(self):
+    def refreshToken(self, force_expire: bool = False):
         """Rebuild the OAuth session so the next request refreshes the token.
+
+        force_expire marks the current access token as expired first. Without
+        it a rebuilt session keeps using a token whose expires_at still lies in
+        the future, so after a 401 (token revoked or invalidated early) the
+        retry sent the same rejected token again.
 
         Serialized and rate limited: the coordinator polls every few minutes
         and button presses share this instance, so an expired token used to
@@ -320,6 +325,11 @@ class Siedle:
                 _LOGGER.debug("Skipping token refresh, one just happened")
                 return
             self._last_refresh = now
+
+            if force_expire and self._token:
+                self._token = dict(self._token)
+                self._token["expires_at"] = now - 10
+                self._token["expires_in"] = "-30"
 
             self._client = OAuth2Session(
                 self._client_id,
@@ -425,7 +435,7 @@ class Siedle:
             _LOGGER.error("HTTP Error Siedle API: %s", e)
             if e.response is not None and e.response.status_code == 401:
                 try:
-                    self.refreshToken()
+                    self.refreshToken(force_expire=True)
                     response = self._client.get(url, timeout=30)
                     response.raise_for_status()
                     return response.json()
@@ -458,7 +468,7 @@ class Siedle:
             _LOGGER.error("HTTP Error Siedle API: %s", e)
             if e.response is not None and e.response.status_code == 401:
                 try:
-                    self.refreshToken()
+                    self.refreshToken(force_expire=True)
                     _LOGGER.debug("Retrying POST with refreshed token")
                     response = self._client.post(url, json=data, timeout=30)
                     response.raise_for_status()
@@ -492,7 +502,7 @@ class Siedle:
             _LOGGER.error("HTTP Error Siedle API: %s", e)
             if e.response is not None and e.response.status_code == 401:
                 try:
-                    self.refreshToken()
+                    self.refreshToken(force_expire=True)
                     response = self._client.put(url, json=data, timeout=30)
                     response.raise_for_status()
                     return response.json() if response.text else {}
@@ -831,36 +841,37 @@ class Siedle:
         # Enable paho auto-reconnect for post-connect drops (1s–30s backoff)
         self._mqtt_client.reconnect_delay_set(min_delay=1, max_delay=30)
 
-        for attempt in range(3):
-            try:
-                self._mqtt_client.connect(
-                    mqtt_config['host'],
-                    mqtt_config['port'],
-                    keepalive=60,
-                )
-                self._mqtt_client.loop_start()
+        # connect_async + loop_start: paho's network thread runs
+        # loop_forever(retry_first_connection=True), so it keeps retrying with
+        # the backoff above until the broker answers. The old synchronous
+        # connect() gave up after three tries and left a client behind whose
+        # loop was stopped: MQTT then stayed down until the entry was reloaded
+        # (e.g. when HA boots before DNS/Internet is up).
+        try:
+            self._mqtt_client.connect_async(
+                mqtt_config['host'],
+                mqtt_config['port'],
+                keepalive=60,
+            )
+            self._mqtt_client.loop_start()
+        except Exception as e:
+            _LOGGER.error("MQTT client could not be started: %s", e)
+            self._mqtt_client = None
+            self._mqtt_connected = False
+            return False
 
-                # Wait up to 10s for on_connect callback
-                deadline = time.time() + 10
-                while not self._mqtt_connected and time.time() < deadline:
-                    time.sleep(0.1)
+        # Wait a little for the first connection so setup can report it.
+        deadline = time.time() + 15
+        while not self._mqtt_connected and time.time() < deadline:
+            time.sleep(0.1)
 
-                if self._mqtt_connected:
-                    _LOGGER.info("MQTT connection established")
-                    return True
+        if self._mqtt_connected:
+            _LOGGER.info("MQTT connection established")
+            return True
 
-                _LOGGER.warning("MQTT connection attempt %d/3 timed out", attempt + 1)
-                self._mqtt_client.loop_stop()
-                self._mqtt_connected = False
-
-            except Exception as e:
-                _LOGGER.warning("MQTT connect attempt %d/3 failed: %s", attempt + 1, e)
-
-            if attempt < 2:
-                delay = 2 ** attempt  # 1s, 2s
-                time.sleep(delay)
-
-        _LOGGER.error("MQTT connection failed after 3 attempts")
+        _LOGGER.warning(
+            "MQTT not connected yet - retrying in the background"
+        )
         return False
     
     def disconnect_mqtt(self):

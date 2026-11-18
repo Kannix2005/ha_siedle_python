@@ -41,7 +41,13 @@ TO_REDACT_OPTIONS = {
     "forward_from_number",
     "fritzbox_user",
     "fritzbox_phone_number",
+    # The DTMF door code opens the front door from any connected phone.
+    "dtmf_door_code",
+    "dtmf_light_code",
 }
+
+# Call history entries carry the caller's SIP URI and number.
+TO_REDACT_HISTORY = {"from", "caller_id"}
 
 
 async def async_get_config_entry_diagnostics(
@@ -152,5 +158,8 @@ async def async_get_config_entry_diagnostics(
         "fcm": fcm_info,
         "coordinator": coordinator_data,
         "call_history_count": len(call_history),
-        "call_history_last_5": call_history[-5:] if call_history else [],
+        "call_history_last_5": [
+            async_redact_data(dict(call), TO_REDACT_HISTORY)
+            for call in call_history[-5:]
+        ],
     }

@@ -142,6 +142,8 @@ class SipCall:
     invite_cseq: int = 1
     local_from: Optional[str] = None
     auth_attempted: bool = False
+    # SDP of our 200 OK, sent again when the peer re-INVITEs within the call.
+    local_sdp: Optional[str] = None
     
     def next_cseq(self) -> int:
         """Get and increment CSeq."""
@@ -247,6 +249,9 @@ class SipConnection:
         # Keepalive / re-registration
         self._last_recv_time: float = 0.0
         self._last_register_time: float = 0.0
+        self._re_register_auth_sent = False
+        # Time the current re-REGISTER went out; 0 while none is pending.
+        self._register_pending_since: float = 0.0
         self._connection_lost = False
         # Re-register interval: 300s (well before 3600s Expires)
         self.re_register_interval: int = 300
@@ -553,15 +558,20 @@ class SipConnection:
         # RFC 3261 §8.2.6.2: To tag must be consistent across all responses for the same dialog.
         # Reuse the same tag for 1xx and 2xx responses to the same Call-ID.
         call_id = request.call_id
-        if call_id not in self._dialog_to_tags:
-            if len(self._dialog_to_tags) > 200:
-                self._dialog_to_tags.clear()
-            self._dialog_to_tags[call_id] = uuid.uuid4().hex[:8]
-        to_tag = self._dialog_to_tags[call_id]
+        if call_id in self._dialog_to_tags:
+            to_tag = self._dialog_to_tags[call_id]
+        else:
+            to_tag = uuid.uuid4().hex[:8]
+            if request.method == "INVITE":
+                # Only calls are remembered: OPTIONS pings and the like would
+                # fill the table and push out the tag of a running call.
+                if len(self._dialog_to_tags) > 200:
+                    self._dialog_to_tags.clear()
+                self._dialog_to_tags[call_id] = to_tag
 
-        # Build To header with tag for 200 OK
+        # RFC 3261 §8.2.6.2: every response except 100 Trying carries a To tag
         to_header = request.to_header
-        if status_code in (180, 200) and ";tag=" not in to_header:
+        if status_code > 100 and ";tag=" not in to_header:
             to_header = f"{to_header};tag={to_tag}"
         
         lines = [f"SIP/2.0 {status_code} {status_text}"]
@@ -808,6 +818,7 @@ class SipConnection:
 
                     if msg.status_code == 200:
                         self._registered = True
+                        self._apply_granted_expires(msg)
                         _LOGGER.info("%s: SIP registration successful", self.name)
                         if not self._external_ip:
                             self._discover_external_ip_via_stun()
@@ -823,6 +834,7 @@ class SipConnection:
                     _LOGGER.error("%s: Could not extract realm/nonce from WWW-Authenticate", self.name)
             elif msg.status_code == 200:
                 self._registered = True
+                self._apply_granted_expires(msg)
                 _LOGGER.info("%s: SIP registration successful (no auth)", self.name)
                 if not self._external_ip:
                     self._discover_external_ip_via_stun()
@@ -988,9 +1000,23 @@ class SipConnection:
                     elif cseq_method == "REGISTER":
                         if msg.status_code == 200:
                             _LOGGER.debug(f"{self.name}: Re-REGISTER successful")
+                            self._register_pending_since = 0.0
+                            self._registered = True
+                            self._apply_granted_expires(msg)
                         elif msg.status_code in (401, 407):
                             # Nonce expired — extract new nonce and retry
                             self._handle_register_auth_challenge(msg)
+                        elif msg.status_code >= 300:
+                            # A refresh the server refuses means we are no
+                            # longer reachable for INVITEs. Let the health
+                            # monitor do a full reconnect instead of carrying
+                            # on as "registered".
+                            _LOGGER.warning(
+                                "%s: Re-REGISTER rejected: %s %s - reconnecting",
+                                self.name, msg.status_code, msg.status_text,
+                            )
+                            self._registered = False
+                            self._connection_lost = True
                         else:
                             _LOGGER.debug(f"{self.name}: REGISTER response {msg.status_code}")
                         continue
@@ -1015,14 +1041,50 @@ class SipConnection:
         if realm_match and nonce_match:
             self._realm = realm_match.group(1)
             self._nonce = nonce_match.group(1)
+            # Answer the challenge once per refresh. A second 401 means the
+            # credentials themselves are rejected; retrying would loop.
+            if self._re_register_auth_sent:
+                _LOGGER.warning(
+                    f"{self.name}: REGISTER rejected again after authentication "
+                    f"({msg.status_code}) - reconnecting"
+                )
+                self._registered = False
+                self._connection_lost = True
+                return
+            self._re_register_auth_sent = True
             _LOGGER.debug(f"{self.name}: Got new nonce from REGISTER {msg.status_code}, retrying re-REGISTER...")
             try:
-                self._send_re_register()
+                if self._socket and self._connected:
+                    self._socket.send(self._create_register(with_auth=True))
             except Exception as e:
                 _LOGGER.warning(f"{self.name}: Re-REGISTER retry failed: {e}")
         else:
             _LOGGER.debug(f"{self.name}: REGISTER {msg.status_code} without parseable auth header")
     
+    def _apply_granted_expires(self, msg: SipMessage):
+        """Refresh at half the registration time the server granted.
+
+        We ask for 3600 s, but a registrar may grant less (Contact ;expires=
+        or an Expires header). With the fixed 300 s refresh a grant below
+        300 s let the registration lapse between refreshes.
+        """
+        granted = None
+        contact = msg.headers.get("Contact") or msg.headers.get("m") or ""
+        # Other devices of the account may be listed too; the shortest wins.
+        listed = re.findall(r";\s*expires\s*=\s*(\d+)", contact, re.IGNORECASE)
+        if listed:
+            granted = min(int(v) for v in listed)
+        elif (msg.headers.get("Expires") or "").strip().isdigit():
+            granted = int(msg.headers["Expires"].strip())
+        if granted:
+            interval = max(30, min(300, granted // 2))
+            if interval != self.re_register_interval:
+                _LOGGER.debug(
+                    "%s: Server granted %ss - re-REGISTER every %ss",
+                    self.name, granted, interval,
+                )
+                self.re_register_interval = interval
+
     def _keepalive_loop(self):
         """Periodic keepalive and re-registration loop."""
         _LOGGER.debug("%s: Keepalive loop started (OPTIONS every %ss, re-REGISTER every %ss)", self.name, self.keepalive_interval, self.re_register_interval)
@@ -1045,6 +1107,14 @@ class SipConnection:
                     self._connection_lost = True
                     break
             
+            # A re-REGISTER that got no final answer means the registration
+            # is about to lapse unnoticed (RFC 3261 Timer F: 32 s).
+            if self._register_pending_since and (now - self._register_pending_since) > 32:
+                _LOGGER.warning(f"{self.name}: No answer to re-REGISTER after 32s - reconnecting")
+                self._registered = False
+                self._connection_lost = True
+                break
+
             # Re-register periodically
             if (now - self._last_register_time) > self.re_register_interval:
                 try:
@@ -1085,8 +1155,13 @@ class SipConnection:
         """Send a re-REGISTER to refresh registration."""
         if not self._socket or not self._connected:
             return
-        # Send authenticated REGISTER (we already have realm/nonce from initial auth)
-        register_msg = self._create_register(with_auth=True)
+        # Start every refresh without credentials and answer the server's 401
+        # challenge with a fresh nonce (_handle_register_auth_challenge).
+        # Re-using the nonce of the previous registration makes the FRITZ!Box
+        # reject it and log "Anmeldung ... nicht erfolgreich" every time.
+        self._re_register_auth_sent = False
+        register_msg = self._create_register(with_auth=False)
+        self._register_pending_since = time.time()
         self._socket.send(register_msg)
         _LOGGER.debug(f"{self.name}: Re-REGISTER sent")
     
@@ -1199,6 +1274,10 @@ class SipCallManager:
         self._handled_call_ids: Dict[str, float] = {}
         # True while a call we placed ourselves (call_door) is in progress.
         self._door_call_outgoing = False
+        # hangup() on a ringing doorbell call answers it and sends BYE once
+        # the ACK is in.
+        self._hangup_after_ack = False
+        self._hangup_lock = threading.Lock()
         self._external_call: Optional[SipCall] = None
         
         # State
@@ -1493,7 +1572,11 @@ class SipCallManager:
         """Handle message from Siedle SIP server."""
         _LOGGER.debug(f"Siedle message: method={msg.method}, status={msg.status_code}, from={msg.from_header}")
         
-        if msg.is_request and msg.method == "INVITE":
+        if msg.is_request and msg.method == "INVITE" and ";tag=" in (msg.to_header or ""):
+            # A To tag marks a re-INVITE within a call, not a doorbell press
+            self._handle_siedle_reinvite(msg)
+
+        elif msg.is_request and msg.method == "INVITE":
             _LOGGER.warning("SIEDLE INVITE - DOORBELL! From: %s", msg.from_header)
 
             # A repeat of an INVITE we already handled is a retransmission or a
@@ -1620,8 +1703,10 @@ class SipCallManager:
             _LOGGER.info("Siedle: CANCEL received — caller hung up before answer")
             self._send_ok_response(self._siedle_conn, msg)
             
-            # Also send 487 Request Terminated for the original INVITE
-            if self._siedle_call and self._siedle_call.invite_data:
+            # Also send 487 Request Terminated for the original INVITE,
+            # unless it already got its final answer
+            if (self._siedle_call and self._siedle_call.invite_data
+                    and self._siedle_call.state == CallState.RINGING_IN):
                 try:
                     original = SipConnection.parse_message(self._siedle_call.invite_data)
                     response = self._siedle_conn.create_response(original, 487, "Request Terminated")
@@ -1636,7 +1721,12 @@ class SipCallManager:
         elif msg.is_request and msg.method == "ACK":
             _LOGGER.info("Siedle: ACK received - call fully established, RTP should now flow")
             # ACK doesn't require a response
-        
+            if self._hangup_after_ack:
+                self._finish_answer_hangup()
+
+        elif msg.is_request:
+            self._answer_other_request(self._siedle_conn, msg)
+
         elif not msg.is_request:
             # Log all SIP responses (100, 180, 183, etc.)
             _LOGGER.debug(f"Siedle: SIP response {msg.status_code} {msg.status_text}")
@@ -1704,6 +1794,9 @@ class SipCallManager:
             # Propagate: also hang up Siedle side
             _LOGGER.info("Propagating hangup to Siedle side...")
             self._end_call()
+
+        elif msg.is_request and msg.method != "ACK":
+            self._answer_other_request(self._external_conn, msg)
     
     def _handle_external_response(self, msg: SipMessage):
         """Handle a response from the external SIP server.
@@ -1875,6 +1968,44 @@ class SipCallManager:
         match = re.search(r'tag=([^;>\s]+)', header)
         return match.group(1) if match else None
     
+    # Requests accepted without acting on them; anything else gets 501.
+    _ACCEPTED_REQUESTS = ("OPTIONS", "UPDATE", "INFO", "NOTIFY", "PRACK", "MESSAGE", "CANCEL")
+
+    def _answer_other_request(self, conn: SipConnection, msg: SipMessage):
+        """Answer requests the call logic does not handle.
+
+        Left unanswered, an OPTIONS ping can get the contact marked as
+        unreachable, and an UPDATE (session refresh) ends the call after 32 s.
+        """
+        try:
+            if msg.method in self._ACCEPTED_REQUESTS:
+                response = conn.create_response(msg, 200, "OK")
+            else:
+                response = conn.create_response(msg, 501, "Not Implemented")
+            conn.send(response)
+            _LOGGER.debug("%s: answered %s", conn.name, msg.method)
+        except Exception as e:
+            _LOGGER.debug("%s: could not answer %s: %s", conn.name, msg.method, e)
+
+    def _handle_siedle_reinvite(self, msg: SipMessage):
+        """Answer a re-INVITE within the call with the SDP of our 200 OK."""
+        call = self._siedle_call
+        try:
+            if call and call.call_id == msg.call_id and call.local_sdp:
+                _LOGGER.info("Siedle: re-INVITE for the active call - answering with our SDP")
+                response = self._siedle_conn.create_response(
+                    msg, 200, "OK", call.local_sdp, call.local_rtp_port
+                )
+            elif call and call.call_id == msg.call_id:
+                response = self._siedle_conn.create_response(msg, 491, "Request Pending")
+            else:
+                response = self._siedle_conn.create_response(
+                    msg, 481, "Call/Transaction Does Not Exist"
+                )
+            self._siedle_conn.send(response)
+        except Exception as e:
+            _LOGGER.warning("Could not answer Siedle re-INVITE: %s", e)
+
     def _send_ok_response(self, conn: SipConnection, request: SipMessage):
         """Send 200 OK response."""
         response = conn.create_response(request, 200, "OK")
@@ -2249,6 +2380,7 @@ class SipCallManager:
         if self._siedle_call.invite_data:
             original = SipConnection.parse_message(self._siedle_call.invite_data)
             response = self._siedle_conn.create_response(original, 200, "OK", sdp, local_rtp_port)
+            self._siedle_call.local_sdp = sdp
             
             # Log the full raw 200 OK for diagnostics
             _LOGGER.debug(f"Raw 200 OK:\n{response.decode('utf-8', errors='replace')}")
@@ -2423,6 +2555,7 @@ class SipCallManager:
             original = SipConnection.parse_message(self._siedle_call.invite_data)
             response = self._siedle_conn.create_response(original, 200, "OK", sdp,
                                                           self.rtp_bridge.local_port_a)
+            self._siedle_call.local_sdp = sdp
             self._siedle_conn.send(response)
             _LOGGER.info("200 OK sent to Siedle (bridging mode)")
             
@@ -2522,11 +2655,75 @@ class SipCallManager:
         _LOGGER.info("Call ended — state reset to IDLE, ready for next call")
     
     def hangup(self):
-        """Hangup active call (callable from HA)."""
-        if self.is_call_active:
-            self._end_call()
+        """Hangup active call (callable from HA).
+
+        A doorbell call that is still ringing is answered and ended with BYE
+        once the ACK is in. Ending it only locally left the call open at the
+        Siedle server for about 45 s, and further doorbell presses did not
+        arrive during that time (#25).
+        """
+        if not self.is_call_active:
+            return False
+        call = self._siedle_call
+        if (call and call.invite_data and self._siedle_conn
+                and call.state == CallState.RINGING_IN):
+            self._cancel_forward_timeout()
+            self._cancel_external_invite()
+            with self._hangup_lock:
+                self._hangup_after_ack = True
+            if self._answer_siedle_call_to_end():
+                # RFC 3261 §15: BYE only after the ACK; do not wait forever
+                threading.Timer(2.0, self._finish_answer_hangup).start()
+                return True
+            with self._hangup_lock:
+                self._hangup_after_ack = False
+        self._end_call()
+        return True
+
+    def _answer_siedle_call_to_end(self) -> bool:
+        """Send 200 OK without media for the ringing doorbell INVITE."""
+        call = self._siedle_call
+        try:
+            invite = SipConnection.parse_message(call.invite_data)
+            sdp_ip = self._siedle_conn.get_sdp_ip()
+            media_proto = "RTP/AVP"
+            crypto_attr = ""
+            if "RTP/SAVP" in (invite.body or ""):
+                from .srtp_handler import SRTPCrypto
+                media_proto = "RTP/SAVP"
+                crypto_attr = f"a=crypto:{SRTPCrypto.generate_sdp_crypto_line()[0]}\r\n"
+            now = int(time.time())
+            sdp = (
+                f"v=0\r\n"
+                f"o=- {now} {now} IN IP4 {sdp_ip}\r\n"
+                f"s=Siedle HA\r\n"
+                f"c=IN IP4 {sdp_ip}\r\n"
+                f"t=0 0\r\n"
+                f"m=audio 9 {media_proto} 8 101\r\n"
+                f"a=rtpmap:8 PCMA/8000\r\n"
+                f"a=rtpmap:101 telephone-event/8000\r\n"
+                f"a=fmtp:101 0-16\r\n"
+                f"{crypto_attr}"
+                f"a=inactive\r\n"
+            )
+            response = self._siedle_conn.create_response(invite, 200, "OK", sdp)
+            # Before sending: the ACK may arrive before send() returns
+            call.state = CallState.CONNECTED
+            self._siedle_conn.send(response)
+            _LOGGER.info("200 OK sent to Siedle (answering only to end the call)")
             return True
-        return False
+        except Exception as e:
+            call.state = CallState.RINGING_IN
+            _LOGGER.warning(f"Could not answer doorbell call to end it: {e}")
+            return False
+
+    def _finish_answer_hangup(self):
+        """Send the BYE for a call that hangup() answered only to end it."""
+        with self._hangup_lock:
+            if not self._hangup_after_ack:
+                return
+            self._hangup_after_ack = False
+        self._end_call()
     
     def start(self) -> bool:
         """Start SIP manager."""

@@ -412,9 +412,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                         token_provider=lambda: (siedle._token or {}).get("access_token"),
                     )
                     
+                    # Store before the first await: async_start() takes seconds,
+                    # and an unload in that window must find the handler to
+                    # shut it down, or its listener keeps running orphaned.
+                    hass.data[DOMAIN][entry.entry_id]["fcm_handler"] = fcm_handler
                     started = await fcm_handler.async_start()
                     if started:
-                        hass.data[DOMAIN][entry.entry_id]["fcm_handler"] = fcm_handler
                         _LOGGER.info("FCM doorbell detection started successfully")
                         # Notify sensors immediately that FCM is now connected
                         async_dispatcher_send(hass, SIGNAL_SIEDLE_CONNECTION_UPDATE)
@@ -489,7 +492,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
         steps = [
             ("SIP Call Manager", sip_manager and (lambda: hass.async_add_executor_job(sip_manager.stop))),
             ("RTP Bridge", rtp_bridge and (lambda: hass.async_add_executor_job(rtp_bridge.stop))),
-            ("FCM Handler", fcm_handler and fcm_handler.async_stop),
+            ("FCM Handler", fcm_handler and fcm_handler.async_shutdown),
             ("Fritz!Box session", fritzbox_dialer and fritzbox_dialer.close),
             ("MQTT", lambda: hass.async_add_executor_job(api.disconnect_mqtt)),
             ("legacy SIP listener", lambda: hass.async_add_executor_job(api.stop_sip_listener)),

@@ -87,6 +87,10 @@ class SiedleFCMHandler:
         self._connected = False
         self._thread = None
         self._stop_event = threading.Event()
+        # Set for good by async_shutdown() (entry unload). async_start() and
+        # the watchdog check it after every await, so a reconnect that is in
+        # flight while the entry unloads cannot bring a client back to life.
+        self._closed = False
 
         # Watchdog: the FCM connection can die silently — the listener thread
         # ends, or the client stops delivering while still claiming to be
@@ -115,8 +119,15 @@ class SiedleFCMHandler:
         """Return the FCM token."""
         return self._fcm_token
     
+    async def async_shutdown(self) -> None:
+        """Stop for good (entry unload); no watchdog or restart afterwards."""
+        self._closed = True
+        await self.async_stop()
+
     async def async_start(self) -> bool:
         """Start the FCM listener in a background thread."""
+        if self._closed:
+            return False
         if self._running:
             _LOGGER.warning("FCM handler already running")
             return True
@@ -153,6 +164,8 @@ class SiedleFCMHandler:
         if not success:
             _LOGGER.error("Failed to setup FCM credentials")
             return False
+        if self._closed:
+            return False
         
         # Register FCM token with Siedle
         registered = await self._hass.async_add_executor_job(
@@ -161,6 +174,10 @@ class SiedleFCMHandler:
         
         if not registered:
             _LOGGER.warning("Failed to register FCM token with Siedle - doorbell detection may not work")
+        if self._closed:
+            # Unloaded while we were registering: do not start a listener
+            # that nothing would ever stop.
+            return False
         
         # Start listener thread
         self._stop_event.clear()
@@ -197,7 +214,7 @@ class SiedleFCMHandler:
     async def _async_watchdog(self, _now=None) -> None:
         """Reconnect when the listener died or went quiet."""
         self._watchdog_unsub = None
-        if not self._running:
+        if not self._running or self._closed:
             return
 
         # Liveness comes from the library's own status callback and from the
@@ -234,6 +251,8 @@ class SiedleFCMHandler:
         if started:
             self._reconnect_failures = 0
             return  # async_start armed the watchdog again
+        if self._closed:
+            return  # unloaded during the reconnect
 
         # Back off so a permanently unreachable service is not hammered.
         self._reconnect_failures += 1
