@@ -193,6 +193,20 @@ class TokenRefreshTest(unittest.TestCase):
         self.assertLess(session.call_args.kwargs["token"]["expires_at"], api.time.time())
 
 
+class DoorCallPermissionTest(unittest.TestCase):
+    """#29: Siedle decides per installation whether the door may be called."""
+
+    def allowed(self, config):
+        s = api.Siedle.__new__(api.Siedle)
+        s._config = config
+        return s.door_direct_call_allowed()
+
+    def test_follows_the_endpoint_config(self):
+        self.assertFalse(self.allowed({"allowDoorDirectCall": False, "sip": {}}))
+        self.assertTrue(self.allowed({"allowDoorDirectCall": False, "doorDirectCall": {}}))
+        self.assertTrue(self.allowed({"allowDoorDirectCall": True}))
+
+
 class MqttFirstConnectTest(unittest.TestCase):
     """#31: a failed first connection must keep being retried by paho."""
 

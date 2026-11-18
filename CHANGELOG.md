@@ -10,6 +10,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 ### Hinzugefügt
 - **Lautstärke pro Richtung** (#35). Unter *Konfigurieren → Anrufweiterleitung* gibt es zwei neue Optionen „Lautstärke Tür → Telefon" und „Lautstärke Telefon → Tür" in dB (−12 bis +18, Standard 0 = unverändert). Laute Stellen werden weich begrenzt statt abgeschnitten. DTMF-Töne bleiben unverändert.
 
+### Geändert
+- **`siedle.call_door` meldet einen klaren Fehler, wenn Siedle den Türruf für die Anlage nicht freigibt** (#29). Bei 6+n-Anlagen (Gerätetyp ME6N) nimmt der Siedle-Server den Ruf nur mit `100 Trying` an und stellt ihn nie durch; die Siedle-App bietet den Türruf dort gar nicht an. Der Diagnose-Download zeigt die Freigabe als `door_direct_call`.
+
 ### Behoben
 - **Wettläufe zwischen den Threads der Anrufsteuerung** (#30). Anrufzustand und RTP-Bridge wurden von beiden SIP-Verbindungen, Timern und Home-Assistant-Diensten ohne Sperre geändert. Kam zum Beispiel das Abheben am Telefon gleichzeitig mit dem Abbruch der Türstation, konnten RTP-Threads verwaist weiterlaufen. Die Anrufsteuerung läuft jetzt unter einer gemeinsamen Sperre.
 - **SIP-Nachrichten konnten auf TLS/TCP nur teilweise gesendet werden** (#30). Geschrieben wird jetzt immer die ganze Nachricht, und Lesen und Schreiben auf derselben TLS-Verbindung überschneiden sich nicht mehr.

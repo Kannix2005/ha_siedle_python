@@ -609,6 +609,16 @@ class Siedle:
             self._load_config()
         return self._config
     
+    def door_direct_call_allowed(self) -> bool:
+        """Whether Siedle lets this endpoint call the door station itself.
+
+        The official app offers the door call only when the endpoint config
+        carries doorDirectCall. Without it the server accepts the INVITE with
+        100 Trying and never connects it (seen on 6+n systems, device ME6N).
+        """
+        config = self.get_config() or {}
+        return config.get("doorDirectCall") is not None or bool(config.get("allowDoorDirectCall"))
+
     def get_sip_credentials(self):
         """Get SIP credentials for audio/video calls"""
         config = self.get_config()

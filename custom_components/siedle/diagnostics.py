@@ -122,6 +122,12 @@ async def async_get_config_entry_diagnostics(
             "sip_registered": api.sip_registered if hasattr(api, 'sip_registered') else None,
             "endpoint_id": entry.data.get("endpoint_id", "unknown"),
         }
+        # Whether Siedle lets this endpoint call the door itself (call_door).
+        # The official app only offers the door call when doorDirectCall is set.
+        endpoint_config = getattr(api, "_config", None) or {}
+        api_info["allow_door_direct_call"] = endpoint_config.get("allowDoorDirectCall")
+        api_info["door_direct_call"] = endpoint_config.get("doorDirectCall") is not None
+        api_info["device_type"] = endpoint_config.get("deviceType")
     
     # FCM Status
     fcm_info: dict[str, Any] = {"available": False}

@@ -760,6 +760,12 @@ async def async_setup_services(hass: HomeAssistant, siedle: Siedle):
         contact_id = call.data.get(ATTR_CONTACT_ID)
         api = _resolve_api(hass, contact_id)
 
+        if not await hass.async_add_executor_job(api.door_direct_call_allowed):
+            raise HomeAssistantError(
+                "Siedle does not allow calling the door station on this "
+                "installation (doorDirectCall is not enabled for the endpoint)"
+            )
+
         # Find the door contact and its call number
         try:
             doors = await hass.async_add_executor_job(api.get_contacts)

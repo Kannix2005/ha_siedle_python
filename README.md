@@ -326,7 +326,7 @@ automation:
 | `siedle.toggle_light` | `contact_id` (optional) | Toggles door light |
 | `siedle.hangup_call` | — | Ends the active call (doorbell or external) |
 | `siedle.activate_endpoint` | — | Activate endpoint — press doorbell! |
-| `siedle.call_door` | `contact_id` (optional) | **Experimental**, audio only: starts a call to the door station without waiting for a doorbell press |
+| `siedle.call_door` | `contact_id` (optional) | **Experimental**, audio only: starts a call to the door station without waiting for a doorbell press. Only works if Siedle allows door calls for the installation (`door_direct_call` in the diagnostics download); 6+n systems (device type ME6N) do not, and the service then reports an error |
 
 With several Siedle entries, `contact_id` selects the right door station: the service uses the entry whose door contacts contain that ID (the ID is the `contact_id` attribute of the *Türkontakt* binary sensor). Without `contact_id`, or if no entry knows it, the first loaded entry is used. `activate_endpoint` always uses the first loaded entry; `hangup_call` ends the first active call it finds.
 

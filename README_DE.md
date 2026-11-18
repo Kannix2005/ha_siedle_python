@@ -325,7 +325,7 @@ automation:
 | `siedle.toggle_light` | `contact_id` (optional) | Schaltet das Türlicht |
 | `siedle.hangup_call` | — | Beendet den aktiven Anruf (Klingel oder extern) |
 | `siedle.activate_endpoint` | — | Endpoint aktivieren — Klingel drücken! |
-| `siedle.call_door` | `contact_id` (optional) | **Experimentell**, nur Audio: startet einen Anruf zur Türstation, ohne auf einen Klingeldruck zu warten |
+| `siedle.call_door` | `contact_id` (optional) | **Experimentell**, nur Audio: startet einen Anruf zur Türstation, ohne auf einen Klingeldruck zu warten. Funktioniert nur, wenn Siedle den Türruf für die Anlage freigibt (`door_direct_call` im Diagnose-Download); bei 6+n-Anlagen (Gerätetyp ME6N) ist das nicht der Fall, der Dienst meldet dann einen Fehler |
 
 Bei mehreren Siedle-Einträgen wählt `contact_id` die richtige Türstation: Der Service nutzt den Eintrag, dessen Türkontakte diese ID enthalten (die ID steht im Attribut `contact_id` des Binärsensors *Türkontakt*). Ohne `contact_id` oder wenn kein Eintrag die ID kennt, wird der erste geladene Eintrag verwendet. `activate_endpoint` nutzt immer den ersten geladenen Eintrag; `hangup_call` beendet den ersten aktiven Anruf, den es findet.
 
