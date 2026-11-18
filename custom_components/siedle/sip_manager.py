@@ -869,7 +869,10 @@ class SipConnection:
         """Wait for stream data without holding the I/O lock."""
         if hasattr(sock, "pending") and sock.pending():
             return True
-        return bool(select.select([sock], [], [], timeout)[0])
+        # poll(), not select(): select() fails for descriptors above 1023
+        poller = select.poll()
+        poller.register(sock, select.POLLIN)
+        return bool(poller.poll(timeout * 1000))
     
     def _discover_external_ip_via_stun(self):
         """Use STUN to discover our public IP address."""
@@ -1467,11 +1470,16 @@ class SipCallManager:
         
         def _locked_timeout():
             with self._call_lock:
+                # cancel() no longer stops a timer that already fired and
+                # was waiting for the lock: it must not act on a later state
+                if self._forward_timeout_timer is not timer:
+                    return
                 _on_timeout()
 
-        self._forward_timeout_timer = threading.Timer(self.forward_timeout, _locked_timeout)
-        self._forward_timeout_timer.daemon = True
-        self._forward_timeout_timer.start()
+        timer = threading.Timer(self.forward_timeout, _locked_timeout)
+        timer.daemon = True
+        self._forward_timeout_timer = timer
+        timer.start()
         _LOGGER.info(f"Forward timeout started: {self.forward_timeout}s")
     
     def _cancel_forward_timeout(self):

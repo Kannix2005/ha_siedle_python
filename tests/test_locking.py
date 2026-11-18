@@ -67,6 +67,14 @@ class CallLockTest(unittest.TestCase):
             self.mgr._start_forward_timeout()
         self.assertTrue(self.blocked_until_release(timer.call_args[0][1]))
 
+    def test_cancelled_timeout_that_already_fired_does_nothing(self):
+        with mock.patch.object(sm.threading, "Timer") as timer:
+            self.mgr._start_forward_timeout()
+        fired = timer.call_args[0][1]
+        self.mgr._cancel_forward_timeout()  # e.g. the phone answered meanwhile
+        fired()
+        self.assertEqual(self.mgr.state, sm.CallState.CONNECTED)
+
     def test_handlers_may_end_the_call_themselves(self):
         with self.mgr._call_lock:  # re-entrant
             self.mgr._end_call()

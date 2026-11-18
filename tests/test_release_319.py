@@ -206,6 +206,12 @@ class DoorCallPermissionTest(unittest.TestCase):
         self.assertTrue(self.allowed({"allowDoorDirectCall": False, "doorDirectCall": {}}))
         self.assertTrue(self.allowed({"allowDoorDirectCall": True}))
 
+    def test_missing_config_is_not_reported_as_forbidden(self):
+        s = api.Siedle.__new__(api.Siedle)
+        s._config = None
+        s._load_config = lambda: None
+        self.assertTrue(s.door_direct_call_allowed())
+
 
 class MqttFirstConnectTest(unittest.TestCase):
     """#31: a failed first connection must keep being retried by paho."""

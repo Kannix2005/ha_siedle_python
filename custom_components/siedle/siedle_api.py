@@ -616,7 +616,9 @@ class Siedle:
         carries doorDirectCall. Without it the server accepts the INVITE with
         100 Trying and never connects it (seen on 6+n systems, device ME6N).
         """
-        config = self.get_config() or {}
+        config = self.get_config()
+        if not config:
+            return True  # config unavailable: do not report that as "not allowed"
         return config.get("doorDirectCall") is not None or bool(config.get("allowDoorDirectCall"))
 
     def get_sip_credentials(self):
