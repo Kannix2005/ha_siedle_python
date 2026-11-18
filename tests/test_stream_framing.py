@@ -42,6 +42,7 @@ def connection(chunks, transport=sm.SipTransport.TCP):
                        password="pw", transport=transport)
     conn = sm.SipConnection(cfg, "External-SIP")
     conn._socket = ChunkSocket(chunks)
+    conn._wait_readable = lambda sock, timeout: True  # no real fd
     conn._running = True
     return conn
 

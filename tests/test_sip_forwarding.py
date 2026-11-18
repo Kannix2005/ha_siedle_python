@@ -25,6 +25,8 @@ class FakeSocket:
     def send(self, data):
         self.sent.append(data.decode())
 
+    sendall = send
+
 
 def hdr(msg: str, name: str) -> str:
     m = re.search(rf"^{name}:\s*(.*?)\r?$", msg, re.M)
