@@ -15,6 +15,9 @@ from cryptography.hazmat.backends import default_backend
 _LOGGER = logging.getLogger(__name__)
 
 
+# Crypto suites this module implements (RFC 4568 names).
+SUPPORTED_SUITES = ("AES_CM_128_HMAC_SHA1_80",)
+
 class SRTPCrypto:
     """Handle SRTP encryption/decryption."""
     
@@ -57,8 +60,10 @@ class SRTPCrypto:
                 _LOGGER.error(f"Invalid crypto suite format: {crypto_suite}")
                 return None
             
-            key_material_b64 = crypto_suite.split("inline:")[1].strip()
-            key_material = base64.b64decode(key_material_b64)
+            # inline:<key||salt>[|lifetime][|MKI:length] [session params]
+            key_material_b64 = crypto_suite.split("inline:", 1)[1].strip()
+            key_material_b64 = key_material_b64.split()[0].split("|")[0]
+            key_material = base64.b64decode(key_material_b64, validate=True)
             
             # AES_CM_128_HMAC_SHA1_80 uses:
             # - 16 bytes master key
@@ -80,7 +85,31 @@ class SRTPCrypto:
             return None
     
     @staticmethod
-    def generate_sdp_crypto_line() -> Tuple[str, "SRTPCrypto"]:
+    def select_offer_crypto(sdp: str) -> Optional[Tuple[str, str]]:
+        """Pick the a=crypto line of the audio stream we can handle.
+
+        Returns (tag, attribute value) or None. Only the audio m-section is
+        looked at (an offer may carry video with its own keys), and only
+        AES_CM_128_HMAC_SHA1_80, the one suite this module implements. The
+        old code took the first a=crypto line of the whole body, whatever
+        its suite or media line.
+        """
+        in_audio = False
+        for line in sdp.replace("\r\n", "\n").split("\n"):
+            line = line.strip()
+            if line.startswith("m="):
+                in_audio = line.startswith("m=audio")
+                continue
+            if not in_audio or not line.startswith("a=crypto:"):
+                continue
+            value = line[len("a=crypto:"):]
+            parts = value.split()
+            if len(parts) >= 3 and parts[1] in SUPPORTED_SUITES:
+                return parts[0], value
+        return None
+
+    @staticmethod
+    def generate_sdp_crypto_line(tag: str = "1") -> Tuple[str, "SRTPCrypto"]:
         """Generate a new SRTP crypto line for SDP answer.
         
         Creates random 16-byte key + 14-byte salt (30 bytes total),
@@ -93,7 +122,8 @@ class SRTPCrypto:
         """
         key_material = os.urandom(30)  # 16 byte key + 14 byte salt
         key_b64 = base64.b64encode(key_material).decode('ascii')
-        sdp_line = f"1 AES_CM_128_HMAC_SHA1_80 inline:{key_b64}"
+        # RFC 4568 6.1: the answer echoes the tag of the offer line it accepts.
+        sdp_line = f"{tag} AES_CM_128_HMAC_SHA1_80 inline:{key_b64}"
         
         master_key = key_material[:16]
         master_salt = key_material[16:30]

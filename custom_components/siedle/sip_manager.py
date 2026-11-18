@@ -2256,12 +2256,12 @@ class SipCallManager:
                     uses_srtp = True
                     _LOGGER.info("Siedle uses SRTP - extracting crypto parameters")
                     
-                    # Extract crypto line from SDP
-                    for line in invite_msg.body.split('\r\n'):
-                        if line.startswith('a=crypto:'):
-                            crypto_line = line[9:]  # Remove "a=crypto:" prefix
-                            _LOGGER.info("Found crypto line: %s", crypto_line.split("inline:")[0].strip())
-                            break
+                    # Crypto line of the audio stream with a suite we implement
+                    from .srtp_handler import SRTPCrypto
+                    offer = SRTPCrypto.select_offer_crypto(invite_msg.body)
+                    if offer:
+                        crypto_tag, crypto_line = offer
+                        _LOGGER.info("Found crypto line: %s", crypto_line.split("inline:")[0].strip())
                     
                     if crypto_line:
                         try:
@@ -2342,7 +2342,7 @@ class SipCallManager:
             # RFC 4568: Answer MUST contain its own crypto key, NOT echo the offerer's key
             try:
                 from .srtp_handler import SRTPCrypto
-                our_crypto_line, srtp_encrypt = SRTPCrypto.generate_sdp_crypto_line()
+                our_crypto_line, srtp_encrypt = SRTPCrypto.generate_sdp_crypto_line(crypto_tag)
                 crypto_attr = f"a=crypto:{our_crypto_line}\r\n"
                 if self.rtp_bridge:
                     # What we send to the door (keepalive, announcement) must
@@ -2464,11 +2464,11 @@ class SipCallManager:
                 uses_srtp = True
                 _LOGGER.info("Siedle uses SRTP — setting up dual crypto contexts")
                 
-                # Extract Siedle's crypto key for decryption
-                for line in invite_msg.body.split('\r\n'):
-                    if line.startswith('a=crypto:'):
-                        crypto_line = line[9:]
-                        break
+                # Siedle's key for decryption: audio stream, supported suite
+                from .srtp_handler import SRTPCrypto
+                offer = SRTPCrypto.select_offer_crypto(invite_msg.body)
+                if offer:
+                    crypto_tag, crypto_line = offer
                 
                 if crypto_line:
                     try:
@@ -2478,7 +2478,7 @@ class SipCallManager:
                             _LOGGER.info("SRTP decrypt context created (Siedle's key)")
 
                         # Generate our own key for encryption
-                        our_crypto_line, srtp_encrypt = SRTPCrypto.generate_sdp_crypto_line()
+                        our_crypto_line, srtp_encrypt = SRTPCrypto.generate_sdp_crypto_line(crypto_tag)
                         if srtp_encrypt:
                             _LOGGER.info("SRTP encrypt context created (our key)")
                     except Exception as e:
@@ -2691,7 +2691,9 @@ class SipCallManager:
             if "RTP/SAVP" in (invite.body or ""):
                 from .srtp_handler import SRTPCrypto
                 media_proto = "RTP/SAVP"
-                crypto_attr = f"a=crypto:{SRTPCrypto.generate_sdp_crypto_line()[0]}\r\n"
+                offer = SRTPCrypto.select_offer_crypto(invite.body)
+                tag = offer[0] if offer else "1"
+                crypto_attr = f"a=crypto:{SRTPCrypto.generate_sdp_crypto_line(tag)[0]}\r\n"
             now = int(time.time())
             sdp = (
                 f"v=0\r\n"

@@ -1,5 +1,6 @@
 """SRTP (AES_CM_128_HMAC_SHA1_80) against the published test vectors."""
 import importlib
+import base64
 import unittest
 
 import test_sip_forwarding  # registers the siedle_ut package
@@ -80,3 +81,40 @@ class SrtpVectorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(srtp is None, "cryptography not installed")
+class OfferSelectionTest(unittest.TestCase):
+    """#28: answer the audio crypto line that was offered, with its tag."""
+
+    KEY = base64.b64encode(bytes(range(30))).decode()
+
+    def offer(self, *lines):
+        return "\r\n".join(("v=0", *lines, ""))
+
+    def test_audio_line_with_supported_suite_wins(self):
+        sdp = self.offer(
+            "m=video 5004 RTP/SAVP 96",
+            f"a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:{self.KEY}",
+            "m=audio 5002 RTP/SAVP 8",
+            f"a=crypto:1 AES_256_CM_HMAC_SHA1_80 inline:{self.KEY}",
+            f"a=crypto:2 AES_CM_128_HMAC_SHA1_80 inline:{self.KEY}|2^31|1:1",
+        )
+        tag, line = srtp.SRTPCrypto.select_offer_crypto(sdp)
+        self.assertEqual(tag, "2")
+        self.assertIn("|2^31|1:1", line)
+
+    def test_offer_without_supported_audio_suite_is_not_taken(self):
+        sdp = self.offer("m=audio 5002 RTP/SAVP 8",
+                         f"a=crypto:1 AES_256_CM_HMAC_SHA1_80 inline:{self.KEY}")
+        self.assertIsNone(srtp.SRTPCrypto.select_offer_crypto(sdp))
+
+    def test_lifetime_and_mki_are_not_part_of_the_key(self):
+        crypto = srtp.SRTPCrypto.from_base64(
+            f"2 AES_CM_128_HMAC_SHA1_80 inline:{self.KEY}|2^31|1:1")
+        self.assertEqual(crypto.master_key, bytes(range(16)))
+        self.assertEqual(crypto.master_salt, bytes(range(16, 30)))
+
+    def test_answer_echoes_the_tag(self):
+        line, _ = srtp.SRTPCrypto.generate_sdp_crypto_line("2")
+        self.assertTrue(line.startswith("2 AES_CM_128_HMAC_SHA1_80 inline:"))
