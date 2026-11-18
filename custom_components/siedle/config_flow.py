@@ -34,6 +34,9 @@ from .const import (
     # F1: Call Timeout
     CONF_FORWARD_TIMEOUT,
     DEFAULT_FORWARD_TIMEOUT,
+    CONF_GAIN_DOOR_TO_PHONE,
+    CONF_GAIN_PHONE_TO_DOOR,
+    DEFAULT_GAIN_DB,
     # F6: Time-Based Forwarding
     CONF_FORWARD_SCHEDULE_ENABLED,
     CONF_FORWARD_SCHEDULE_START,
@@ -325,6 +328,14 @@ class SiedleOptionsFlowHandler(config_entries.OptionsFlow):
                         CONF_AUTO_ANSWER,
                         default=self.config_entry.options.get(CONF_AUTO_ANSWER, False),
                     ): bool,
+                    vol.Optional(
+                        CONF_GAIN_DOOR_TO_PHONE,
+                        default=self.config_entry.options.get(CONF_GAIN_DOOR_TO_PHONE, DEFAULT_GAIN_DB),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=-12, max=18)),
+                    vol.Optional(
+                        CONF_GAIN_PHONE_TO_DOOR,
+                        default=self.config_entry.options.get(CONF_GAIN_PHONE_TO_DOOR, DEFAULT_GAIN_DB),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=-12, max=18)),
                 }
             ),
             description_placeholders={

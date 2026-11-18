@@ -46,6 +46,8 @@ from .const import (
     SIGNAL_SIEDLE_CONNECTION_UPDATE,
     # F1: Forward timeout
     CONF_FORWARD_TIMEOUT,
+    CONF_GAIN_DOOR_TO_PHONE,
+    CONF_GAIN_PHONE_TO_DOOR,
     DEFAULT_FORWARD_TIMEOUT,
     # F2: Multi-target (uses CONF_FORWARD_TO_NUMBER)
     # F6: Schedule
@@ -297,6 +299,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 
                 # Create RTP Bridge
                 rtp_bridge = RtpBridge()
+                rtp_bridge.set_gains(
+                    entry.options.get(CONF_GAIN_DOOR_TO_PHONE, 0),
+                    entry.options.get(CONF_GAIN_PHONE_TO_DOOR, 0),
+                )
                 sip_manager.rtp_bridge = rtp_bridge
                 
                 # Set callbacks

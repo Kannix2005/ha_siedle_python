@@ -189,6 +189,8 @@ Servers that require a digest login for the forwarded call (`401`/`407`, e.g. a 
 | Allowed Caller Number | — | Filter for calls **from** the external SIP server **to** the door: an incoming call is only accepted if this number is contained in its From header, otherwise it is rejected with `403`. Empty = accept every caller. Nothing is sent as a caller ID. |
 | Timeout | 30 sec. | Ring time per target before the next one is tried (5–120 sec.) |
 | Auto-Answer | Off | Automatically answer door station |
+| Volume door → phone | 0 dB | Gain for the door microphone, −12 to +18 dB (0 = unchanged) |
+| Volume phone → door | 0 dB | Gain for the voice from the phone at the door, −12 to +18 dB (0 = unchanged) |
 
 ### Forwarding Schedule
 

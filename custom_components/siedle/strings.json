@@ -68,7 +68,9 @@
           "forward_to_number": "Forward doorbell to this number (comma-separated for multiple)",
           "forward_from_number": "Allow calls from this number to door",
           "auto_answer": "Auto-answer door calls",
-          "forward_timeout": "Ring timeout per target (seconds)"
+          "forward_timeout": "Ring timeout per target (seconds)",
+          "gain_door_to_phone": "Volume door → phone (dB, 0 = unchanged)",
+          "gain_phone_to_door": "Volume phone → door (dB, 0 = unchanged)"
         }
       },
       "forward_schedule": {

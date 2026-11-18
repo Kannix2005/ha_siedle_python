@@ -68,7 +68,9 @@
           "forward_to_number": "Bei Klingeln diese Nummern anrufen (kommagetrennt)",
           "forward_from_number": "Anrufe von dieser Nummer zur Tür erlauben",
           "auto_answer": "Tür-Anrufe automatisch annehmen",
-          "forward_timeout": "Klingeldauer pro Ziel (Sekunden)"
+          "forward_timeout": "Klingeldauer pro Ziel (Sekunden)",
+          "gain_door_to_phone": "Lautstärke Tür → Telefon (dB, 0 = unverändert)",
+          "gain_phone_to_door": "Lautstärke Telefon → Tür (dB, 0 = unverändert)"
         }
       },
       "forward_schedule": {

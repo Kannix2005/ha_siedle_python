@@ -36,6 +36,11 @@ CONF_FORWARD_TO_NUMBER = "forward_to_number"  # Kommasepariert für mehrere Ziel
 CONF_FORWARD_FROM_NUMBER = "forward_from_number"  # Nummer die zur Tür forwarden darf
 CONF_AUTO_ANSWER = "auto_answer"  # Automatisch Tür-Call annehmen
 
+# Audio gain per direction in dB (0 = unchanged)
+CONF_GAIN_DOOR_TO_PHONE = "gain_door_to_phone"
+CONF_GAIN_PHONE_TO_DOOR = "gain_phone_to_door"
+DEFAULT_GAIN_DB = 0
+
 # Call Timeout (F1)
 CONF_FORWARD_TIMEOUT = "forward_timeout"  # Sekunden bis Timeout bei Weiterleitung
 DEFAULT_FORWARD_TIMEOUT = 30  # 30 Sekunden

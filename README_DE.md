@@ -188,6 +188,8 @@ Server, die für den weitergeleiteten Anruf eine Digest-Anmeldung verlangen (`40
 | Erlaubte Anrufernummer | — | Filter für Anrufe **vom** externen SIP-Server **zur** Tür: Ein eingehender Anruf wird nur angenommen, wenn diese Nummer in seinem From-Header vorkommt, sonst wird er mit `403` abgewiesen. Leer = jeder Anrufer wird angenommen. Es wird keine Rufnummer gesendet. |
 | Timeout | 30 Sek. | Klingeldauer pro Ziel, bevor das nächste versucht wird (5–120 Sek.) |
 | Auto-Answer | Aus | Türstation automatisch annehmen |
+| Lautstärke Tür → Telefon | 0 dB | Verstärkung des Türmikrofons, −12 bis +18 dB (0 = unverändert) |
+| Lautstärke Telefon → Tür | 0 dB | Verstärkung der Stimme vom Telefon an der Tür, −12 bis +18 dB (0 = unverändert) |
 
 ### Zeitsteuerung Weiterleitung
 

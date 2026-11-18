@@ -5,6 +5,16 @@ Alle wichtigen Änderungen an diesem Projekt werden hier dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [3.2.0] - 2026-11-18
+
+### Hinzugefügt
+- **Lautstärke pro Richtung** (#35). Unter *Konfigurieren → Anrufweiterleitung* gibt es zwei neue Optionen „Lautstärke Tür → Telefon" und „Lautstärke Telefon → Tür" in dB (−12 bis +18, Standard 0 = unverändert). Laute Stellen werden weich begrenzt statt abgeschnitten. DTMF-Töne bleiben unverändert.
+
+### Behoben
+- **Wettläufe zwischen den Threads der Anrufsteuerung** (#30). Anrufzustand und RTP-Bridge wurden von beiden SIP-Verbindungen, Timern und Home-Assistant-Diensten ohne Sperre geändert. Kam zum Beispiel das Abheben am Telefon gleichzeitig mit dem Abbruch der Türstation, konnten RTP-Threads verwaist weiterlaufen. Die Anrufsteuerung läuft jetzt unter einer gemeinsamen Sperre.
+- **SIP-Nachrichten konnten auf TLS/TCP nur teilweise gesendet werden** (#30). Geschrieben wird jetzt immer die ganze Nachricht, und Lesen und Schreiben auf derselben TLS-Verbindung überschneiden sich nicht mehr.
+- **Die SRTP-Antwort übernimmt Tag und Verfahren des Angebots** (#28). Bisher wurde die erste `a=crypto`-Zeile des gesamten Angebots genommen, auch wenn sie zu einem Videostrom gehörte, und immer mit Tag 1 geantwortet.
+
 ## [3.1.9] - 2026-11-18
 
 ### Behoben
