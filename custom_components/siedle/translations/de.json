@@ -62,9 +62,8 @@
       },
       "call_forwarding": {
         "title": "Anrufweiterleitung",
-        "description": "Konfigurieren Sie die Anrufweiterleitung zwischen Türstation und externen Telefonen.\n\n**Weiterleitung an**: Komma-getrennte Liste von Nummern (z.B. **620,**621,**9). Erste Nummer wird zuerst probiert, dann nächste bei Timeout.\n**Weiterleitung von**: Nummer die zur Tür anrufen darf.\n**Timeout**: Sekunden pro Ziel bis zum nächsten Versuch.",
+        "description": "Konfigurieren Sie die Anrufweiterleitung zwischen Türstation und externen Telefonen.\n\n**Weiterleitung an**: Komma-getrennte Liste von Nummern (z.B. **620,**621,**9). Erste Nummer wird zuerst probiert, dann nächste bei Timeout.\n**Weiterleitung von**: Nummer die zur Tür anrufen darf.\n**Timeout**: Sekunden pro Ziel bis zum nächsten Versuch.\n\nEin- und ausgeschaltet wird die Weiterleitung über den Schalter **Weiterleitung**, ohne die Integration neu zu laden.",
         "data": {
-          "forward_enabled": "Anrufweiterleitung aktivieren",
           "forward_to_number": "Bei Klingeln diese Nummern anrufen (kommagetrennt)",
           "forward_from_number": "Anrufe von dieser Nummer zur Tür erlauben",
           "auto_answer": "Tür-Anrufe automatisch annehmen",

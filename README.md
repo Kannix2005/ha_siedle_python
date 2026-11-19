@@ -130,6 +130,11 @@ All entities belong to one device named `Siedle <first 8 characters of the endpo
 | Licht | Turn on door light |
 | Auflegen | End active call (only with SIP enabled) |
 
+### Switches
+| Entity name | Description |
+|-------------|-------------|
+| Weiterleitung | Turn call forwarding on and off without reloading the integration (only with SIP enabled; unavailable without a target number). The state survives restarts. Meant for automations, e.g. forward only while someone is present. |
+
 ### Camera
 | Entity name | Description |
 |-------------|-------------|
@@ -182,9 +187,10 @@ Servers that require a digest login for the forwarded call (`401`/`407`, e.g. a 
 
 ### Call Forwarding
 
+Forwarding is turned on and off with the **Weiterleitung** switch (see entities). It is on as soon as a target number is entered.
+
 | Option | Default | Description |
 |--------|---------|-------------|
-| Enabled | Off | Forwarding on doorbell |
 | Target Number | — | e.g., `**9` (FritzBox broadcast); several targets comma-separated (e.g. `**620,**621`), tried one after another |
 | Allowed Caller Number | — | Filter for calls **from** the external SIP server **to** the door: an incoming call is only accepted if this number is contained in its From header, otherwise it is rejected with `403`. Empty = accept every caller. Nothing is sent as a caller ID. |
 | Timeout | 30 sec. | Ring time per target before the next one is tried (5–120 sec.) |

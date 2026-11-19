@@ -16,7 +16,6 @@ from .const import (
     CONF_EXT_SIP_USERNAME,
     CONF_EXT_SIP_PASSWORD,
     CONF_EXT_SIP_TRANSPORT,
-    CONF_FORWARD_ENABLED,
     CONF_FORWARD_TO_NUMBER,
     CONF_FORWARD_FROM_NUMBER,
     CONF_AUTO_ANSWER,
@@ -308,10 +307,6 @@ class SiedleOptionsFlowHandler(config_entries.OptionsFlow):
             step_id="call_forwarding",
             data_schema=vol.Schema(
                 {
-                    vol.Optional(
-                        CONF_FORWARD_ENABLED,
-                        default=self.config_entry.options.get(CONF_FORWARD_ENABLED, False),
-                    ): bool,
                     vol.Optional(
                         CONF_FORWARD_TO_NUMBER,
                         default=self.config_entry.options.get(CONF_FORWARD_TO_NUMBER, ""),

@@ -129,6 +129,11 @@ Alle Entitäten gehören zu einem Gerät mit dem Namen `Siedle <erste 8 Zeichen 
 | Licht | Türlicht einschalten |
 | Auflegen | Aktiven Anruf beenden (nur bei aktiviertem SIP) |
 
+### Schalter
+| Entitätsname | Beschreibung |
+|--------------|--------------|
+| Weiterleitung | Anrufweiterleitung ein- und ausschalten, ohne die Integration neu zu laden (nur bei aktiviertem SIP; nicht verfügbar ohne Zielrufnummer). Der Zustand bleibt über Neustarts erhalten. Geeignet für Automationen, z.B. nur bei Anwesenheit weiterleiten. |
+
 ### Kamera
 | Entitätsname | Beschreibung |
 |--------------|--------------|
@@ -181,9 +186,10 @@ Server, die für den weitergeleiteten Anruf eine Digest-Anmeldung verlangen (`40
 
 ### Anrufweiterleitung
 
+Ein- und ausgeschaltet wird die Weiterleitung über den Schalter **Weiterleitung** (siehe Entitäten). Sobald eine Zielrufnummer eingetragen ist, ist er eingeschaltet.
+
 | Option | Standard | Beschreibung |
 |--------|----------|--------------|
-| Aktiviert | Aus | Weiterleitung bei Klingeln |
 | Zielrufnummer | — | z.B. `**9` (FritzBox Rundruf); mehrere Ziele kommasepariert (z.B. `**620,**621`), werden nacheinander versucht |
 | Erlaubte Anrufernummer | — | Filter für Anrufe **vom** externen SIP-Server **zur** Tür: Ein eingehender Anruf wird nur angenommen, wenn diese Nummer in seinem From-Header vorkommt, sonst wird er mit `403` abgewiesen. Leer = jeder Anrufer wird angenommen. Es wird keine Rufnummer gesendet. |
 | Timeout | 30 Sek. | Klingeldauer pro Ziel, bevor das nächste versucht wird (5–120 Sek.) |

@@ -5,6 +5,15 @@ Alle wichtigen Änderungen an diesem Projekt werden hier dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [3.2.2] - 2026-11-19
+
+### Hinzugefügt
+- **Schalter „Weiterleitung"**. Die Anrufweiterleitung lässt sich jetzt im laufenden Betrieb ein- und ausschalten, zum Beispiel per Automation nur bei Anwesenheit. Bisher ging das nur über die Optionen, und jede Optionsänderung lädt die Integration neu; ein Klingeln in dieser Zeit konnte verloren gehen. Der Schalter merkt sich seinen Zustand über Neustarts. Ohne Zielrufnummer ist er nicht verfügbar.
+
+### Geändert
+- **Die Option „Anrufweiterleitung aktivieren" entfällt**, der Schalter ersetzt sie. Beim Update übernimmt der Schalter den bisherigen Wert der Option. Bei neuen Installationen ist die Weiterleitung an, sobald eine Zielrufnummer eingetragen ist.
+- **Die „Erlaubte Anrufernummer" gilt jetzt unabhängig davon, ob die Weiterleitung an ist.** Bisher wurde der Filter für Anrufe vom externen SIP-Server zur Tür bei ausgeschalteter Weiterleitung nicht angewendet.
+
 ## [3.2.1] - 2026-11-19
 
 ### Behoben

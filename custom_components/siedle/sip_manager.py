@@ -1254,6 +1254,7 @@ class SipCallManager:
         siedle_config: SipConfig,
         external_config: Optional[SipConfig] = None,
         forward_to_number: Optional[str] = None,
+        forward_enabled: bool = True,
         forward_from_number: Optional[str] = None,
         auto_answer: bool = False,
         recording_enabled: bool = False,
@@ -1278,7 +1279,10 @@ class SipCallManager:
     ):
         self.siedle_config = siedle_config
         self.external_config = external_config
-        self.forward_to_number = forward_to_number
+        # forward_to_number is what a doorbell ring looks at; the forwarding
+        # switch clears and restores it from the configured value.
+        self.configured_forward_to_number = forward_to_number or None
+        self.forward_to_number = self.configured_forward_to_number if forward_enabled else None
         self.forward_from_number = forward_from_number
         self.auto_answer = auto_answer
         self.recording_enabled = recording_enabled
@@ -1420,6 +1424,12 @@ class SipCallManager:
         
         return in_window
     
+    @_call_locked
+    def set_forwarding_enabled(self, enabled: bool):
+        """Turn doorbell forwarding on or off at runtime (forwarding switch)."""
+        self.forward_to_number = self.configured_forward_to_number if enabled else None
+        _LOGGER.info("Call forwarding %s", "enabled" if self.forward_to_number else "disabled")
+
     def _get_forward_targets(self) -> List[str]:
         """Get list of forwarding targets (F2).
         

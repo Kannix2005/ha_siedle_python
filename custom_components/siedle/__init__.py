@@ -87,7 +87,7 @@ from .fcm_handler import SiedleFCMHandler
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON, Platform.CAMERA]
+PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON, Platform.CAMERA, Platform.SWITCH]
 
 _reloading_entries: set = set()
 
@@ -245,9 +245,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                         _LOGGER.debug("External SIP configured: %s", ext_host)
                 
                 # Get forwarding settings
-                forward_enabled = entry.options.get(CONF_FORWARD_ENABLED, False)
-                forward_to = entry.options.get(CONF_FORWARD_TO_NUMBER) if forward_enabled else None
-                forward_from = entry.options.get(CONF_FORWARD_FROM_NUMBER) if forward_enabled else None
+                # The forwarding switch turns forwarding on and off at runtime.
+                # forward_enabled is no longer an option; entries that still
+                # carry it use it as the switch's start value.
+                forward_enabled = entry.options.get(CONF_FORWARD_ENABLED, True)
+                forward_to = entry.options.get(CONF_FORWARD_TO_NUMBER)
+                forward_from = entry.options.get(CONF_FORWARD_FROM_NUMBER)
                 
                 # Auto-answer if explicitly enabled OR if recording is enabled (can't record without answering)
                 recording_enabled = entry.options.get(CONF_RECORDING_ENABLED, False)
@@ -271,6 +274,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     siedle_config=siedle_sip_config,
                     external_config=external_sip_config,
                     forward_to_number=forward_to,
+                    forward_enabled=forward_enabled,
                     forward_from_number=forward_from,
                     auto_answer=auto_answer,
                     recording_enabled=recording_enabled,

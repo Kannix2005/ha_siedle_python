@@ -62,9 +62,8 @@
       },
       "call_forwarding": {
         "title": "Call Forwarding",
-        "description": "Configure call forwarding between door station and external phones.\n\n**Forward to number**: Comma-separated list of numbers to try in order (e.g., **620,**621,**9). First number is tried first, then next on timeout.\n**Forward from number**: Number that can call the door station.\n**Timeout**: Seconds to ring each target before trying next.",
+        "description": "Configure call forwarding between door station and external phones.\n\n**Forward to number**: Comma-separated list of numbers to try in order (e.g., **620,**621,**9). First number is tried first, then next on timeout.\n**Forward from number**: Number that can call the door station.\n**Timeout**: Seconds to ring each target before trying next.\n\nForwarding is turned on and off with the **Weiterleitung** switch entity, without reloading the integration.",
         "data": {
-          "forward_enabled": "Enable call forwarding",
           "forward_to_number": "Forward doorbell to this number (comma-separated for multiple)",
           "forward_from_number": "Allow calls from this number to door",
           "auto_answer": "Auto-answer door calls",
