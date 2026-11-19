@@ -682,6 +682,15 @@ class AudioRecorder:
         return self._recording
 
 
+def _is_stun(data: bytes) -> bool:
+    """True for a STUN message (RFC 5389 §6: two zero bits, then the magic cookie).
+
+    STUN discovery asks several servers from the RTP socket and takes the first
+    answer; the others arrive once the bridge is already reading that socket.
+    """
+    return len(data) >= 20 and data[0] < 0x40 and data[4:8] == b"\x21\x12\xa4\x42"
+
+
 class RtpBridge:
     """
     Bridges RTP audio between two endpoints.
@@ -1158,6 +1167,8 @@ class RtpBridge:
         while self._running:
             try:
                 data, addr = self._socket_a.recvfrom(2048)
+                if _is_stun(data):
+                    continue  # late answer to our own STUN discovery
                 if data and not self._is_expected_source(addr, self._remote_a, "A->B"):
                     continue
                 if data:
@@ -1247,6 +1258,8 @@ class RtpBridge:
         while self._running:
             try:
                 data, addr = self._socket_b.recvfrom(2048)
+                if _is_stun(data):
+                    continue  # late answer to our own STUN discovery
                 if data and not self._is_expected_source(addr, self._remote_b, "B->A"):
                     continue
                 if data:

@@ -5,6 +5,11 @@ Alle wichtigen Änderungen an diesem Projekt werden hier dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [3.2.1] - 2026-11-19
+
+### Behoben
+- **Nicht erreichbare STUN-Server verzögerten das Weiterleiten um bis zu 16 Sekunden.** Die vier STUN-Server wurden nacheinander mit je 2 Sekunden Wartezeit abgefragt, einmal pro RTP-Socket. In dieser Zeit klingelte das Telefon noch nicht, und `siedle.hangup_call` musste warten. Jetzt werden alle Server gleichzeitig gefragt, die erste Antwort zählt, und die Abfrage endet samt Namensauflösung nach höchstens 1,5 Sekunden.
+
 ## [3.2.0] - 2026-11-18
 
 ### Hinzugefügt
