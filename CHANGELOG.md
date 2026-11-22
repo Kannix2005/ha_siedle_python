@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden hier dokumentiert.
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [3.2.3] - 2026-11-22
+
+### Behoben
+- **Kein Ton vom Telefon und kein Auflegen bei einem SIP-Server im eigenen Netz** (#21, #36, Dank an @stebl27 und @hans-kn). Fügt der Server der Antwort keine `received=`-Adresse hinzu, weil kein NAT dazwischen liegt, ermittelte die Integration per STUN die öffentliche Adresse und trug sie für das Telefon ein. Die FRITZ!Box schickte den Ton und das `BYE` dann ins Internet. Für einen SIP-Server im privaten Netz wird jetzt kein STUN mehr gemacht; eine vom Server gemeldete `received=`-Adresse gilt weiterhin.
+- Die Warnung „Could not determine external IP" erscheint bei einem SIP-Server im eigenen Netz nicht mehr.
+
 ## [3.2.2] - 2026-11-19
 
 ### Hinzugefügt

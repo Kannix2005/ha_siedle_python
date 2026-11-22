@@ -828,10 +828,7 @@ class SipConnection:
                         _LOGGER.info("%s: SIP registration successful", self.name)
                         if not self._external_ip:
                             self._discover_external_ip_via_stun()
-                        if self._external_ip:
-                            _LOGGER.debug("%s: External IP for SDP: %s", self.name, self._external_ip)
-                        else:
-                            _LOGGER.warning("%s: Could not determine external IP — RTP may fail behind NAT", self.name)
+                        self._log_sdp_address()
                         return True
                     else:
                         _LOGGER.error("%s: Registration failed: %s %s\n%s", self.name, msg.status_code, msg.status_text, msg.raw[:500])
@@ -874,6 +871,14 @@ class SipConnection:
         poller.register(sock, select.POLLIN)
         return bool(poller.poll(timeout * 1000))
     
+    def _log_sdp_address(self):
+        """Report which address goes into the SDP after registering."""
+        if self._external_ip:
+            _LOGGER.debug("%s: External IP for SDP: %s", self.name, self._external_ip)
+        elif not _is_private_ip(self.config.host):
+            # A server in our own network is reached with the local address.
+            _LOGGER.warning("%s: Could not determine external IP — RTP may fail behind NAT", self.name)
+
     def _discover_external_ip_via_stun(self):
         """Use STUN to discover our public IP address."""
         if _is_private_ip(self.config.host):
