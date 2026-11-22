@@ -876,6 +876,12 @@ class SipConnection:
     
     def _discover_external_ip_via_stun(self):
         """Use STUN to discover our public IP address."""
+        if _is_private_ip(self.config.host):
+            # A server in our own network sees our real address. Without a
+            # Via received= there is no NAT on the way, and the public address
+            # from STUN would send its RTP and BYE out to the internet.
+            _LOGGER.info(f"{self.name}: SIP server {self.config.host} is on LAN, skipping STUN")
+            return
         try:
             from .stun_client import discover_external_address
             _LOGGER.info(f"{self.name}: Attempting STUN discovery for external IP...")
